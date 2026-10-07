@@ -1,0 +1,13 @@
+# Secrets — never commit. Rotate any key that was previously committed.
+.env
+.env.*
+.dev.vars
+
+# Dependencies & build output
+node_modules/
+dist/
+.wrangler/
+
+# OS / editor noise
+.DS_Store
+*.log

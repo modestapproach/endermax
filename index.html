@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+        // Dev-only capture shim: with ?headless=1, rAF callbacks queue and
+        // window.__pump(ms) advances frames manually so renders continue even
+        // when the tab is hidden (used for automated screenshot capture).
+        if (new URLSearchParams(location.search).has('headless')) {
+            (function () {
+                var q = [];
+                window.requestAnimationFrame = function (cb) { q.push(cb); return q.length; };
+                window.cancelAnimationFrame = function () {};
+                window.__pump = function (frames, spacingMs) {
+                    frames = frames || 1; spacingMs = spacingMs || 0;
+                    for (var i = 0; i < frames; i++) {
+                        var t0 = performance.now();
+                        while (performance.now() - t0 < spacingMs) { /* real time between frames */ }
+                        var cbs = q; q = [];
+                        for (var j = 0; j < cbs.length; j++) { try { cbs[j](performance.now()); } catch (e) {} }
+                    }
+                };
+            })();
+        }
+    </script>
+    <title>Endermax — Usability Testing in Mixed Reality</title>
+    <meta name="description" content="Endermax simulates a 3D store and records gaze, movement, voice, and emotion to power UX research.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap">
+    <style>
+        :root {
+            --accent-color: #4f46e5;
+            --accent-hover: #6366f1;
+            --text-secondary: #a1a1aa;
+        }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a2e;
+            font-family: 'Inter', sans-serif;
+            /* Ensure font is set early if possible, though it loads from URL */
+        }
+
+        canvas {
+            display: block;
+        }
+
+        /* Front Page Styles */
+        .front-page-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: #0f0f1a;
+            z-index: 20000;
+            /* Higher than Landing Page */
+            overflow-y: auto;
+            /* Allow vertical scrolling */
+            overflow-x: hidden;
+            opacity: 1;
+            transition: opacity 0.5s ease;
+            cursor: pointer;
+            /* Indicate clickable */
+        }
+
+        .front-page-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .front-page-image {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        /* Critical Landing Page Styles */
+        .landing-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: #0f0f1a;
+            z-index: 10000;
+            /* Highest priority */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            opacity: 1;
+            transition: opacity 0.5s ease;
+        }
+
+        .landing-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .landing-background {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 50% 50%, rgba(79, 70, 229, 0.15) 0%, rgba(15, 15, 26, 0) 70%);
+            z-index: -1;
+        }
+
+        .landing-content {
+            text-align: center;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.5rem;
+            animation: slideUpFade 0.8s ease-out;
+        }
+
+        @keyframes slideUpFade {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .landing-logo {
+            width: 600px;
+            max-width: 90vw;
+            height: auto;
+            margin-bottom: 1rem;
+            filter: drop-shadow(0 0 20px rgba(79, 70, 229, 0.3));
+            animation: logoFloat 6s ease-in-out infinite;
+        }
+
+        @keyframes logoFloat {
+
+            0%,
+            100% {
+                transform: translateY(0);
+            }
+
+            50% {
+                transform: translateY(-10px);
+            }
+        }
+
+        .landing-subtitle {
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            line-height: 1.6;
+            margin-bottom: 2rem;
+        }
+
+        .btn-explore {
+            background: var(--accent-color);
+            color: white;
+            padding: 1rem 2.5rem;
+            border-radius: 50px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 20px rgba(79, 70, 229, 0.4);
+            display: flex;
+            align-items: center;
+        }
+
+        .btn-explore:hover {
+            background: var(--accent-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(79, 70, 229, 0.6);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="canvas-container">
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <!-- Headset Overlay -->
+    <div id="headset-overlay">
+        <img src="/src/assets/ui-effects/headset_outline.png" alt="Headset overlay" />
+    </div>
+
+    <div id="ui-container">
+        <!-- Onboarding Panel (Left Side) -->
+        <!-- Onboarding Panel (Left Side) -->
+        <div id="onboarding-panel" class="glass-card onboarding-panel hidden-left">
+            <div class="onboarding-header">
+                <h2>Welcome! Let's Get Started</h2>
+            </div>
+
+            <div class="onboarding-slides-container">
+                <!-- Slide 1: Permissions -->
+                <div class="onboarding-slide active" id="slide-permissions">
+                    <h3>1. Permissions</h3>
+                    <div class="onboarding-checklist">
+                        <div class="checklist-item" id="step-mic">
+                            <div class="checkbox"></div>
+                            <div class="step-content">
+                                <span class="step-label">Enable Microphone</span>
+                                <button id="enableMicBtn" class="btn hidden"
+                                    style="background: var(--accent-color); margin-top: 0.5rem; width: 100%;">Enable
+                                    Mic</button>
+                            </div>
+                        </div>
+
+                        <!-- New Audio Test Step -->
+                        <div class="checklist-item" id="step-audio-test">
+                            <div class="checkbox"></div>
+                            <div class="step-content">
+                                <span class="step-label">Test Microphone</span>
+                                <div class="audio-test-inline-controls"
+                                    style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
+                                    <div style="display: flex; gap: 0.5rem;">
+                                        <button id="startTestRecordBtn" class="btn btn-primary" style="flex: 1;">🔴
+                                            Record</button>
+                                        <button id="playTestAudioBtn" class="btn btn-secondary hidden"
+                                            style="flex: 1;">▶️ Play</button>
+                                    </div>
+                                    <div id="audioTestStatus" style="font-size: 0.8rem; color: var(--text-secondary);">
+                                    </div>
+                                    <audio id="testAudioPlayer" controls
+                                        style="width: 100%; display: none; margin-top: 0.5rem;"></audio>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="checklist-item" id="step-cam">
+                            <div class="checkbox"></div>
+                            <div class="step-content">
+                                <span class="step-label">Enable Camera</span>
+                                <button id="enableCamBtn" class="btn hidden"
+                                    style="background: var(--accent-color); margin-top: 0.5rem; width: 100%;">Enable
+                                    Cam</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Slide 2: Movement -->
+                <div class="onboarding-slide hidden" id="slide-movement">
+                    <h3>2. Movement</h3>
+                    <div class="onboarding-checklist">
+                        <div class="checklist-item" id="step1">
+                            <div class="checkbox"></div>
+                            <span class="step-label">Look around by moving your mouse</span>
+                        </div>
+                        <div class="checklist-item" id="step2">
+                            <div class="checkbox"></div>
+                            <span class="step-label">Move using WASD or Arrow keys</span>
+                        </div>
+                        <div class="checklist-item" id="step3">
+                            <div class="checkbox"></div>
+                            <span class="step-label">Drag to rotate your view</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Slide 3: Test Emotion Detection -->
+                <div class="onboarding-slide hidden" id="slide-emotion">
+                    <h3>3. Test Emotion Detection</h3>
+                    <div class="onboarding-checklist">
+                        <div class="checklist-item" id="step-voice">
+                            <div class="checkbox"></div>
+                            <div class="step-content">
+                                <span class="step-label">Test Assistant</span>
+                                <button id="testVoiceBtn" class="btn hidden"
+                                    style="background: var(--accent-color); margin-top: 0.5rem; width: 100%;">Test
+                                    Voice</button>
+                            </div>
+                        </div>
+                        <div class="checklist-item" id="step-face">
+                            <div class="checkbox"></div>
+                            <span class="step-label">Test facial expression detection</span>
+                        </div>
+                        <div class="checklist-item" id="step-emoji">
+                            <div class="checkbox"></div>
+                            <span class="step-label">Click an emotion emoji</span>
+                        </div>
+                        <div class="checklist-item" id="step4">
+                            <div class="checkbox"></div>
+                            <span class="step-label">Hover over the task panel</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pagination Dots -->
+            <div class="onboarding-pagination">
+                <span class="page-dot active" data-slide="1"></span>
+                <span class="page-dot" data-slide="2"></span>
+                <span class="page-dot" data-slide="3"></span>
+            </div>
+
+            <div class="onboarding-controls"
+                style="margin-top: 1rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;">
+                <div class="onboarding-nav-buttons" style="display: flex; gap: 0.5rem;">
+                    <button id="prevSlideBtn" class="btn-nav-square" disabled>&lt;</button>
+                    <button id="nextSlideBtn" class="btn-nav-square">&gt;</button>
+                </div>
+                <button id="nextTutorialBtn" class="btn" style="background: var(--accent-color);">Skip Step</button>
+            </div>
+        </div>
+
+        <!-- Onboarding Instruction (Centered) -->
+        <div class="onboarding-instruction">
+            <button id="closeInstructionBtn" class="btn-close-instruction">×</button>
+            <p id="onboarding-text">Try looking around by moving your mouse.</p>
+        </div>
+
+        <!-- Audio Test Panel Removed (Moved to Step 2) -->
+
+        <!-- Top Left Info -->
+        <!-- Right Side Panels Container -->
+        <div class="right-panel-container">
+            <!-- Legend Panel -->
+            <div class="glass-card info-panel">
+                <!-- Removed App Title -->
+                <div class="instructions">
+                    <p>Move <span class="key-hint">WASD</span> or <span class="key-hint">Arrows</span> to walk</p>
+                    <p>Drag to rotate view</p>
+                    <p>Move mouse to look around</p>
+                </div>
+                <div class="control-group" style="margin-top: 1rem;">
+                    <div class="control-label">Heat Intensity</div>
+                    <div class="legend">
+                        <div class="legend-item" style="background: #ffffff"></div>
+                        <div class="legend-item" style="background: #87ceeb"></div>
+                        <div class="legend-item" style="background: #00ff00"></div>
+                        <div class="legend-item" style="background: #ffff00"></div>
+                        <div class="legend-item" style="background: #ff8800"></div>
+                        <div class="legend-item" style="background: #ff0000"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings & Items Panel -->
+            <div class="glass-card settings-panel">
+                <button id="cameraToggle" class="btn btn-camera" style="width: 100%;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    First Person
+                </button>
+                <button id="settingsToggle" class="btn btn-settings" style="margin-top: 0.5rem; width: 100%;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path
+                            d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24">
+                        </path>
+                    </svg>
+                    Settings
+                </button>
+
+                <hr class="panel-divider">
+
+                <div class="items-section">
+                    <h3>Items:</h3>
+                    <div id="items-list" class="items-list">
+                        <span class="no-items">No items collected</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Prompt Window (Bottom Right) -->
+        <div id="prompt-window" class="glass-card prompt-window hidden-right">
+            <div class="prompt-header">
+                <h3>Task</h3>
+            </div>
+            <div class="prompt-content">
+                <p id="prompt-text">Task will appear here</p>
+                <button id="begin-test-btn" class="mission-complete-btn hidden"
+                    style="background: var(--accent-color); animation: pulse-blue 2s infinite;">Begin Test</button>
+                <button id="mission-complete-btn" class="mission-complete-btn hidden">Next Mission</button>
+            </div>
+            <div class="prompt-navigation">
+                <div class="prompt-dots">
+                    <span class="dot active" data-prompt="0"></span>
+                    <span class="dot" data-prompt="1"></span>
+                    <span class="dot" data-prompt="2"></span>
+                    <span class="dot" data-prompt="3"></span>
+                </div>
+                <div class="prompt-controls">
+                    <button id="prevPrompt" class="btn-nav" disabled>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polyline points="15 18 9 12 15 6"></polyline>
+                        </svg>
+                    </button>
+                    <button id="nextPrompt" class="btn-nav">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Controls -->
+        <div id="controlsPanel" class="glass-card controls-panel">
+            <!-- Reset Button -->
+            <div class="control-group">
+                <button id="resetBtn" class="btn btn-danger">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                        <path d="M3 3v5h5"></path>
+                    </svg>
+                    Reset Heatmap
+                </button>
+            </div>
+
+            <!-- Decay Toggle -->
+            <div class="control-group">
+                <div class="control-label">Heat Decay</div>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="decayToggle">
+                        <span class="slider"></span>
+                    </label>
+                    <span id="decayStatus" style="font-size: 0.8rem; color: var(--text-secondary)">OFF</span>
+                </div>
+            </div>
+
+            <!-- Movement Speed Slider -->
+            <div class="control-group">
+                <div class="control-label">Move Speed</div>
+                <div class="range-container">
+                    <input type="range" id="speedSlider" min="0.05" max="0.5" step="0.01" value="0.2">
+                    <span id="speedValue" class="value-display">0.2</span>
+                </div>
+            </div>
+
+            <!-- AOE Slider -->
+            <div class="control-group">
+                <div class="control-label">AOE Radius</div>
+                <div class="range-container">
+                    <input type="range" id="aoeSlider" min="0.5" max="10" step="0.1" value="2.8">
+                    <span id="aoeValue" class="value-display">2.8</span>
+                </div>
+            </div>
+            <!-- Data Recording Removed -->
+            <!-- Reset Tutorial Button -->
+            <div class="control-group">
+                <button id="resetTutorialBtn" class="btn btn-secondary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path
+                            d="M12 2v6M12 16v6M4.93 4.93l4.24 4.24M14.83 14.83l4.24 4.24M2 12h6M16 12h6M4.93 19.07l4.24-4.24M14.83 9.17l4.24-4.24">
+                        </path>
+                    </svg>
+                    Reset Tutorial
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="interaction-prompt" class="interaction-prompt hidden">
+        <div class="key-icon">Space</div>
+        <span id="interaction-text">to collect beans</span>
+    </div>
+
+    <!-- Bottom Controls Container -->
+    <div id="bottom-controls-container" class="bottom-controls-container hidden">
+        <!-- Emotion Bar -->
+        <div id="emotion-bar" class="emotion-bar glass-card">
+            <button class="emotion-btn" data-emotion="happy" title="Happy">🙂</button>
+            <button class="emotion-btn" data-emotion="neutral" title="Neutral">😐</button>
+            <button class="emotion-btn" data-emotion="mad" title="Mad">😠</button>
+            <button class="emotion-btn" data-emotion="confused" title="Confused">😕</button>
+            <button class="emotion-btn" data-emotion="thinking" title="Thinking">🤔</button>
+        </div>
+
+        <!-- Recording Panel -->
+        <div id="recording-panel" class="recording-panel glass-card">
+            <div class="recording-indicator">
+                <div class="rec-dot"></div>
+                <span>REC</span>
+            </div>
+            <button id="endTestBtn" class="btn btn-danger">End Test</button>
+        </div>
+    </div>
+
+    <!-- Narration Instruction Modal -->
+    <div id="narration-modal" class="modal-overlay hidden">
+        <div class="glass-card modal-content">
+            <h3>Important Instruction</h3>
+            <p>Please speak your thoughts out loud and narrate your actions as you proceed through the test.</p>
+            <button id="narration-ok-btn" class="btn hidden"
+                style="background: var(--accent-color); margin-top: 1rem; width: 100%; justify-content: center;">OK</button>
+        </div>
+    </div>
+
+    <!-- Completion Popup -->
+    <div id="completion-popup" class="completion-popup">
+        <div class="popup-content glass-card">
+            <h2>Test Complete!</h2>
+            <p>Thank you for participating.</p>
+            <button id="viewResultsBtn" class="btn"
+                style="margin-top: 1.5rem; background: var(--accent-color); width: 100%; justify-content: center;">
+                View Results
+            </button>
+        </div>
+    </div>
+
+    <!-- Front Page (Prototype) -->
+    <div id="front-page" class="front-page-overlay">
+        <img src="/src/assets/front-page/Landing.webp" alt="Front Page" class="front-page-image">
+    </div>
+
+    <!-- Landing Page -->
+    <div id="landing-page" class="landing-overlay">
+        <button class="btn-back-intro" id="btn-back-landing">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+            Back
+        </button>
+        <div class="landing-content">
+            <img src="/src/assets/logo/Endermax.svg" alt="Endermax" class="landing-logo">
+            <p class="landing-subtitle">Experience the future of usability testing in mixed reality.</p>
+            <button class="btn btn-explore">
+                EXPLORE DEMO <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" style="margin-left: 8px;">
+                    <path d="M5 12h14M12 5l7 7-7 7" />
+                </svg>
+            </button>
+        </div>
+        <div class="landing-background"></div>
+    </div>
+
+    <!-- Intro Onboarding Modal -->
+    <div id="intro-modal" class="modal-overlay">
+        <button class="btn-back-intro" id="btn-back-modal">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+            Back
+        </button>
+        <div class="intro-card glass-card">
+            <div class="intro-slide active" data-slide="1">
+                <div class="intro-image-container video-container">
+                    <iframe
+                        src="https://www.youtube.com/embed/d7lpJWDX4XE?autoplay=0&mute=0&loop=1&playlist=d7lpJWDX4XE&controls=1&showinfo=0&rel=0&enablejsapi=1"
+                        loading="lazy" title="Intro Video" frameborder="0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        allowfullscreen class="intro-image">
+                    </iframe>
+                </div>
+                <div class="intro-content">
+                    <div class="intro-pagination">
+                        <span class="intro-dot active"></span>
+                        <span class="intro-dot"></span>
+                    </div>
+                    <h2>Hello! Welcome to our usability test here at Endermax.</h2>
+                    <button class="btn intro-next-btn"
+                        style="background: #7c5cff; width: auto; padding: 0.8rem 2rem; border-radius: 2rem;">
+                        NEXT <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" style="margin-left: 8px;">
+                            <path d="M5 12h14M12 5l7 7-7 7" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="intro-slide" data-slide="2">
+                <div class="intro-image-container">
+                    <img src="/src/assets/intro-slide/2.webp" alt="Instructions" class="intro-image"
+                        onerror="this.src='https://placehold.co/600x400/1a1a2e/FFF?text=Instructions'">
+                </div>
+                <div class="intro-content">
+                    <div class="intro-pagination">
+                        <span class="intro-dot"></span>
+                        <span class="intro-dot active"></span>
+                    </div>
+                    <h2>Please put your headset on and step onto the holo tile floor</h2>
+                    <button class="btn intro-start-btn"
+                        style="background: #7c5cff; width: auto; padding: 0.8rem 2rem; border-radius: 2rem;">
+                        START <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" style="margin-left: 8px;">
+                            <path d="M5 12h14M12 5l7 7-7 7" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Webcam Video for Face Detection (Bottom Right Corner) -->
+    <video id="webcam-video" class="webcam-video hidden" autoplay muted playsinline></video>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+
+</html>
