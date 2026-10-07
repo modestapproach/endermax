@@ -50,10 +50,17 @@ export function initTutorial() {
 
     if (nextBtn) {
         nextBtn.addEventListener('click', () => {
-            if (currentStep < totalSteps) {
-                advanceStep();
-            } else {
-                finishTutorial();
+            // Skip must always work: stop an in-progress mic test first, and
+            // never let an error in the next step's setup swallow the click.
+            try { audioTest?.cancel(); } catch (e) { console.warn(e); }
+            try {
+                if (currentStep < totalSteps) {
+                    advanceStep();
+                } else {
+                    finishTutorial();
+                }
+            } catch (e) {
+                console.error('Tutorial step failed; continuing', e);
             }
         });
     }
@@ -247,8 +254,8 @@ function updateStepUI(step, delay = 0) {
                             // so it isn't held open for the rest of the session.
                             stream.getTracks().forEach(t => t.stop());
                             enableMicBtn.style.animation = ''; // Remove pulse
-                            // Audio test is now inline, just advance
-                            advanceStep();
+                            // Audio test is now inline, just advance (once, even if double-clicked)
+                            if (currentStep === 1) advanceStep();
                         })
                         .catch(err => {
                             console.error("Mic permission denied", err);

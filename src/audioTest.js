@@ -42,9 +42,17 @@ export class AudioTest {
                     }
                 }, 1000);
 
+                this.cancelled = false;
+                this._countdownInterval = countdownInterval;
                 setTimeout(async () => {
                     clearInterval(countdownInterval);
                     await this.stopTestRecording();
+                    if (this.cancelled) {
+                        startBtn.disabled = false;
+                        startBtn.innerHTML = '<span class="rec-dot"></span>Record';
+                        statusEl.textContent = '';
+                        return;
+                    }
                     startBtn.disabled = false;
                     startBtn.innerHTML = '<span class="rec-dot"></span>Record again';
                     playBtn.classList.remove('hidden');
@@ -133,25 +141,39 @@ export class AudioTest {
 
     async stopTestRecording() {
         return new Promise((resolve) => {
-            if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
-                resolve();
-                return;
-            }
-
-            this.mediaRecorder.onstop = () => {
+            const recorder = this.mediaRecorder;
+            let done = false;
+            const finish = (why) => {
+                if (done) return;
+                done = true;
                 this.isRecording = false;
                 this.testAudioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
-                console.log('✅ Test recording stopped. Size:', this.testAudioBlob.size, 'bytes');
-
-                // Stop all tracks
-                if (this.mediaRecorder.stream) {
-                    this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
-                }
-
+                console.log(`✅ Test recording stopped (${why}). Size:`, this.testAudioBlob.size, 'bytes');
+                recorder?.stream?.getTracks().forEach(track => track.stop());
                 resolve();
             };
 
-            this.mediaRecorder.stop();
+            if (!recorder || recorder.state === 'inactive') { finish('already inactive'); return; }
+
+            recorder.onstop = () => finish('onstop');
+            // Never hang the tutorial on a recorder that doesn't report back.
+            setTimeout(() => finish('timeout'), 1500);
+            try {
+                recorder.stop();
+            } catch (e) {
+                console.warn('MediaRecorder.stop failed:', e);
+                finish('stop threw');
+            }
         });
+    }
+
+    // Abort an in-progress test (e.g. the participant pressed Skip Step).
+    cancel() {
+        if (!this.isRecording) return;
+        this.cancelled = true;
+        clearInterval(this._countdownInterval);
+        const statusEl = document.getElementById('audioTestStatus');
+        if (statusEl) statusEl.textContent = '';
+        this.stopTestRecording();
     }
 }
