@@ -37,7 +37,8 @@ const cutoutDist = Fn(() => {
     const aspect = screenSize.x.div(screenSize.y);
     return length(screenUV.sub(cutout.center).mul(vec2(aspect, 1)));
 })();
-const cutoutInFront = step(cutout.depth.add(0.4), positionView.z).mul(cutout.enabled);
+// Only geometry clearly nearer the camera than the shopper is cut.
+const cutoutInFront = step(cutout.depth.add(0.9), positionView.z).mul(cutout.enabled);
 const cutoutMask = cutoutInFront.mul(step(cutoutDist, cutout.radius)).lessThan(0.5);
 const cutoutRim = cutoutInFront.mul(smoothstep(cutout.radius.mul(1.06), cutout.radius.mul(1.0), cutoutDist));
 const withRim = (col) => mix(col, color('#6366f1'), cutoutRim.mul(0.45));

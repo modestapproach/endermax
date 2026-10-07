@@ -15,7 +15,10 @@ const shot = (n) => page.screenshot({ path: `.shots/${prefix}-${n}.png` });
 const visible = (sel) => page.locator(sel).first().isVisible().catch(() => false);
 
 await page.goto('http://localhost:5174/');
-await page.waitForFunction(() => window.endermax?.ready, null, { timeout: 60000 });
+// Headless Chrome only finishes async shader compiles once the canvas is
+// visible (headful Chrome finishes behind the intro pages), so click through
+// like a person and wait for the store afterwards.
+await page.waitForFunction(() => window.endermax, null, { timeout: 60000 });
 await shot('1-front');
 
 await page.click('#front-page').catch(() => {});
@@ -32,6 +35,7 @@ for (let i = 0; i < 8 && await visible('#intro-modal:not(.hidden)'); i++) {
     await btn.click().catch(() => {});
     await page.waitForTimeout(500);
 }
+await page.waitForFunction(() => window.endermax?.ready, null, { timeout: 60000 });
 await shot('4-tutorial');
 
 // Real input: look around, walk forward, turn.

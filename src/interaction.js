@@ -10,7 +10,10 @@ let previousMouseY = 0;
 let yaw = 0;      // body/camera heading (radians); forward is local -Z
 let pitch = 0;    // drag pitch, clamped
 const keys = { w: false, a: false, s: false, d: false, arrowUp: false, arrowDown: false, arrowLeft: false, arrowRight: false, space: false };
-let moveSpeed = 0.2; // v1 units: world units per 60fps frame (settings slider)
+// World units per 60fps frame (Settings slider). v1 moved 0.2 per *rendered*
+// frame, which on the machines it ran on (~30fps) was ~6 units/s; 0.1 here
+// reproduces that speed at any frame rate.
+let moveSpeed = 0.1;
 let isFirstPerson = false;
 let gazeEnabled = true;
 let ctx = null; // { camera, character, world, heat, inventory }
@@ -337,20 +340,46 @@ export function updateGaze(dt) {
 }
 
 // --- See-through cutout ------------------------------------------------------------
+// Like v1, the cut only opens when something actually blocks the camera's view
+// of the shopper: rays from the camera to head, chest and feet are tested
+// against the fixture proxies. It grows/shrinks smoothly instead of popping.
 const _head = new THREE.Vector3();
-export function updateCutout() {
+const _probe = new THREE.Vector3();
+const _occRay = new THREE.Raycaster();
+const PROBE_HEIGHTS = [EYE_HEIGHT, 1.6, 0.4];
+let cutoutAmount = 0;
+
+function shopperOccluded(camera, person) {
+    for (const h of PROBE_HEIGHTS) {
+        _probe.set(person.position.x, person.position.y + h, person.position.z);
+        const dist = camera.position.distanceTo(_probe);
+        _occRay.set(camera.position, _probe.sub(camera.position).normalize());
+        _occRay.far = dist - 0.6; // ignore anything at/behind the shopper
+        if (_occRay.intersectObjects(ctx.world.raycastTargets, false).length) return true;
+    }
+    return false;
+}
+
+export function updateCutout(dt = 1 / 60) {
     if (!ctx) return;
     const { camera } = ctx;
-    if (isFirstPerson) { cutout.enabled.value = 0; return; }
+    if (isFirstPerson) { cutout.enabled.value = 0; cutoutAmount = 0; return; }
     const person = ctx.character.person;
-    _head.set(person.position.x, person.position.y + 1.7, person.position.z);
+
+    const target = shopperOccluded(camera, person) ? 1 : 0;
+    cutoutAmount += (target - cutoutAmount) * Math.min(1, dt * (target ? 14 : 8));
+    window.__cutoutAmount = cutoutAmount; // dev/e2e introspection
+    if (cutoutAmount < 0.01) { cutout.enabled.value = 0; return; }
+
+    _head.set(person.position.x, person.position.y + 1.6, person.position.z);
     const dist = camera.position.distanceTo(_head);
     const viewZ = _head.clone().applyMatrix4(camera.matrixWorldInverse).z;
     _head.project(camera);
     cutout.enabled.value = 1;
     cutout.center.value.set(_head.x * 0.5 + 0.5, 1 - (_head.y * 0.5 + 0.5));
     cutout.depth.value = viewZ;
-    cutout.radius.value = 2.1 / (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+    // Big enough to frame the whole figure (~3.1 units tall).
+    cutout.radius.value = cutoutAmount * 1.9 / (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
 }
 
 // --- Items -------------------------------------------------------------------------

@@ -159,6 +159,7 @@ async function precompile() {
         renderer.setRenderTarget(pass.renderTarget);
         renderer.setMRT(pass.getMRT());
         await renderer.compileAsync(scene, camera, null, (e) => {
+            window.__compileProgress = [e.loaded, e.total];
             if (e.lengthComputable && e.total) setLoading(Math.round(e.loaded / e.total * 100));
         });
         renderer.setMRT(null);
@@ -446,7 +447,7 @@ function tick(dt) {
     camera.updateMatrixWorld();
     pathVisualizer.update(character.person.position);
     updateGaze(dt);
-    updateCutout();
+    updateCutout(dt);
     if (freeCamera) cutout.enabled.value = 0;
     updateTutorial(character.person, null, getIsDragging());
 
