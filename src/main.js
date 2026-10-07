@@ -187,13 +187,12 @@ async function simulateSession({ seconds = 36, fps = 30, snapshotEvery = 2 } = {
         setPose({ x, z, yaw, pitch: 0 });
         // Glance left and right at the shelves, lingering now and then.
         const time = i * dt;
-        setPointer(Math.sin(time * 0.9) * 0.85 + Math.sin(time * 2.3) * 0.1, -0.05 + Math.sin(time * 0.6) * 0.12);
+        setPointer(Math.sin(time * 0.9) * 0.85 + Math.sin(time * 2.3) * 0.1, 0.18 + Math.sin(time * 0.6) * 0.14);
         tick(dt);
         if (i % (snapshotEvery * fps) === 0) {
             const emo = emotions[(i / (snapshotEvery * fps)) % emotions.length];
             character.updateEmoji(emo);
             const p = character.person;
-            const gaze = { origin: null, direction: null };
             await db.snapshots.add({
                 sessionId,
                 timestamp: startTime + Math.round(time * 1000),
