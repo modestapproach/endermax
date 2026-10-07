@@ -4,7 +4,7 @@
 // smooth glow across surfaces instead of per-cube tints.
 
 import * as THREE from 'three/webgpu';
-import { texture3D, uniform, positionWorld, normalWorld, vec3, float, Fn, mix, smoothstep, texture, vec2, clamp } from 'three/tsl';
+import { texture3D, uniform, positionWorld, normalWorld, vec3, float, Fn, mix, smoothstep, texture, vec2, clamp, fract, abs, fwidth, luminance, max } from 'three/tsl';
 import { UNIT } from './layout.js';
 
 // Per-second rates, identical in both camera modes (see v1 STABILITY.md).
@@ -14,8 +14,8 @@ export const HEAT_RATE_DECAY = 0.3;
 
 // The legend's stops: white > light blue > green > yellow > orange > red.
 export const HEAT_STOPS = [
-    [0.0, '#ffffff'], [0.2, '#87ceeb'], [0.4, '#22e06b'],
-    [0.6, '#ffe23d'], [0.8, '#ff8a1f'], [1.0, '#ff2a2a']
+    [0.0, '#ffffff'], [0.2, '#60a5fa'], [0.4, '#22c55e'],
+    [0.6, '#facc15'], [0.8, '#f97316'], [1.0, '#ef4444']
 ];
 
 export class HeatField {
@@ -166,12 +166,20 @@ export function createHeatNodes(field) {
     })();
 
     const heatColor = texture(ramp, vec2(heat, 0.5)).rgb;
-    // How strongly the base albedo is replaced: low heat stays a light wash.
-    const heatMix = smoothstep(float(0.02), float(0.5), heat).mul(0.78);
-    // Keep the underlying product imagery legible through the heat wash.
-    const tint = (base) => mix(base, base.mul(0.3).add(heatColor.mul(0.75)), heatMix);
-    // Hot spots glow so bloom picks them up.
-    const glow = heatColor.mul(heat.mul(heat).mul(0.55));
+    // Fill: nothing below 0.06, capped at 0.6 so packaging stays readable.
+    const heatMix = smoothstep(float(0.06), float(0.45), heat).mul(0.6);
+    // Contour lines every 1/6 of the range make heat read as data, not paint.
+    const bands = heat.mul(6);
+    const contour = smoothstep(fwidth(bands).mul(1.2), float(0), abs(fract(bands).sub(0.5)).mul(2).oneMinus())
+        .mul(smoothstep(float(0.22), float(0.32), heat)).mul(0.8);
+    const tint = (base) => {
+        // Desaturate what's under heat so the ramp has something to sit on.
+        const grey = vec3(luminance(base));
+        const under = mix(base, grey, heatMix.mul(1.2).min(0.6));
+        return mix(mix(under, heatColor, heatMix), heatColor.mul(0.85), contour);
+    };
+    // Only genuinely hot spots glow (bloom), so low heat never haloes.
+    const glow = heatColor.mul(smoothstep(float(0.6), float(1.0), heat).mul(0.35));
 
     return { heat, heatColor, heatMix, tint, glow, strength, ramp };
 }

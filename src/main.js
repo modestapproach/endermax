@@ -11,7 +11,7 @@ import { cutout } from './engine/materials.js';
 import { installDevtools, flags, CAMERA_PRESETS, createDemoHeat } from './engine/devtools.js';
 import {
     setupControls, updateMovement, updateGaze, updateCutout, attachUIHandlers, getIsDragging,
-    onWindowResize, setPose, setFirstPerson, setPointer, getPose
+    onWindowResize, setPose, setFirstPerson, setPointer, getPose, getCurrentGaze, getDesiredFov
 } from './interaction.js';
 
 import { Recorder } from './tracking/Recorder.js';
@@ -32,6 +32,7 @@ let pathVisualizer, promptManager, gameLogic, inventory;
 let emotionState, recorder, faceDetector, voiceAgent;
 let isTestActive = false;
 let freeCamera = null;
+let storeFog = null;
 const clock = new THREE.Clock();
 const planCanvas = document.createElement('canvas');
 
@@ -54,6 +55,7 @@ async function init() {
     heat = new HeatField(layout);
     const heatNodes = createHeatNodes(heat);
     createLighting(scene, renderer);
+    storeFog = scene.fog;
     world = buildWorld(layout, heatNodes);
     scene.add(world.group);
 
@@ -83,7 +85,7 @@ async function init() {
 
     installDevtools({
         renderer, camera, layout, heat, captureFrame, capturePlan,
-        setPose, setFirstPerson, setPointer, getPose, setFreeCamera: (c) => { freeCamera = c; },
+        setPose, setFirstPerson, setPointer, getPose, setFreeCamera: (c) => { freeCamera = c; }, simulateSession,
         info: () => ({
             backend: backendName(renderer), fps,
             drawCalls: renderer.info.render.drawCalls, triangles: renderer.info.render.triangles
@@ -155,6 +157,65 @@ async function captureFrame(type = 'image/jpeg', quality = 0.5, { width = 960, h
         camera.aspect = prevSize.x / prevSize.y; camera.updateProjectionMatrix();
         capturing = false;
     }
+}
+
+// Dev: a scripted shopper walks the store with a wandering gaze and the run is
+// saved as a real session (heat, path, snapshots), so the results page and 3D
+// replay can be exercised without a camera, microphone, or human tester.
+async function simulateSession({ seconds = 36, fps = 30, snapshotEvery = 2 } = {}) {
+    const route = [
+        { x: -0.75, z: 26 }, { x: -0.75, z: 4 }, { x: -2.5, z: -3 },
+        { x: -0.75, z: -12 }, { x: 1.5, z: -26 }
+    ];
+    const legLen = route.slice(1).map((p, i) => Math.hypot(p.x - route[i].x, p.z - route[i].z));
+    const total = legLen.reduce((a, b) => a + b, 0);
+    const emotions = ['neutral', 'thinking', 'happy', 'confused', 'neutral', 'happy', 'mad'];
+
+    heat.reset();
+    pathVisualizer.reset();
+    const startTime = Date.now();
+    const sessionId = await db.sessions.add({ startTime, endTime: null, duration: 0 });
+    const steps = seconds * fps;
+    const dt = 1 / fps;
+    for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        let d = t * total, k = 0;
+        while (k < legLen.length - 1 && d > legLen[k]) d -= legLen[k++];
+        const a = route[k], b = route[k + 1], f = Math.min(d / legLen[k], 1);
+        const x = a.x + (b.x - a.x) * f, z = a.z + (b.z - a.z) * f;
+        const yaw = Math.atan2(-(b.x - a.x), -(b.z - a.z));
+        setPose({ x, z, yaw, pitch: 0 });
+        // Glance left and right at the shelves, lingering now and then.
+        const time = i * dt;
+        setPointer(Math.sin(time * 0.9) * 0.85 + Math.sin(time * 2.3) * 0.1, -0.05 + Math.sin(time * 0.6) * 0.12);
+        tick(dt);
+        if (i % (snapshotEvery * fps) === 0) {
+            const emo = emotions[(i / (snapshotEvery * fps)) % emotions.length];
+            character.updateEmoji(emo);
+            const p = character.person;
+            const gaze = { origin: null, direction: null };
+            await db.snapshots.add({
+                sessionId,
+                timestamp: startTime + Math.round(time * 1000),
+                emotionManual: emo, emotionDetected: emo,
+                gazeTarget: recorder.getGazeTargetDescription(window.currentGazeTarget),
+                gazeVector: getCurrentGaze().direction, gazeOrigin: getCurrentGaze().origin,
+                position: { x: p.position.x, y: p.position.y, z: p.position.z },
+                rotation: p.rotation.y,
+                screenshot: await captureFrame('image/jpeg', 0.6, { width: 640, height: 400 }),
+                birdsEyeScreenshot: capturePlan(512),
+                task: 'Find the chicken'
+            });
+        }
+    }
+    const pathPoints = [];
+    for (let i = 0; i < pathVisualizer.count; i++) pathPoints.push({ x: pathVisualizer.positions[i * 3], y: 0.05, z: pathVisualizer.positions[i * 3 + 2] });
+    await db.sessions.update(sessionId, {
+        endTime: startTime + seconds * 1000, duration: seconds * 1000,
+        heatmapData: heat.toObject(), pathPoints, collectedItems: [],
+        finalPosition: { x: character.person.position.x, y: 0, z: character.person.position.z, rotation: character.person.rotation.y }
+    });
+    return sessionId;
 }
 
 function capturePlan(size = 512) {
@@ -265,12 +326,14 @@ function animate() {
 // while the page isn't animating (hidden tab, automation) still shows up.
 function tick(dt) {
     updateMovement(dt);
+    // Overview cameras sit far outside the store; fog would wash them out.
+    scene.fog = freeCamera ? null : storeFog;
     if (freeCamera) {
         camera.position.set(...freeCamera.pos);
         camera.lookAt(...freeCamera.target);
         if (freeCamera.fov && camera.fov !== freeCamera.fov) { camera.fov = freeCamera.fov; camera.updateProjectionMatrix(); }
-    } else if (camera.fov !== 62) {
-        camera.fov = 62; camera.updateProjectionMatrix();
+    } else if (camera.fov !== getDesiredFov()) {
+        camera.fov = getDesiredFov(); camera.updateProjectionMatrix();
     }
     camera.updateMatrixWorld();
     pathVisualizer.update(character.person.position);

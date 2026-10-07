@@ -67,7 +67,7 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
 
         const geo = new THREE.BoxGeometry(sx, y1 - y0, sz);
         const edgeMat = isSign ? mats.accent : mats.fixture;
-        const img = mats.image(p.id);
+        const img = isSign ? mats.sign(p.label || layout.imageSettings.get(p.id)?.label, spanLen / (y1 - y0)) : mats.image(p.id);
         // BoxGeometry face order: +x, -x, +y, -y, +z, -z. Default per-face UVs
         // already reproduce v1's mapping (back face mirrored so it reads right).
         const faceMats = horizontal
@@ -93,7 +93,7 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
     // Hangers: slim rods from the sign up toward the ceiling line.
     for (const h of layout.hangers) {
         const y0 = 13 * UNIT;
-        const y1 = 20.5 * UNIT;
+        const y1 = 21.5 * UNIT; // up to the ceiling
         metalGeos.push(boxAt(new THREE.CylinderGeometry(0.018, 0.018, y1 - y0, 8), h.gx * UNIT, (y0 + y1) / 2, h.gz * UNIT));
     }
 
@@ -134,6 +134,10 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
     floor.name = 'floor';
     group.add(floor);
 
+    // Shell: ceiling with light strips and perimeter walls. All single-sided
+    // and facing inward, so overview cameras outside/above see straight in.
+    group.add(buildShell(mats));
+
     // Pickup items
     const items = [];
     const itemGroup = new THREE.Group();
@@ -161,6 +165,60 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
     }
 
     return { group, floor, items, itemsRoot: itemGroup, raycastTargets, materials: mats, cellFromHit };
+}
+
+export const SHELL = { half: 30, ceiling: 21.5 * UNIT };
+
+function buildShell(mats) {
+    const shell = new THREE.Group();
+    shell.name = 'shell';
+    const { half, ceiling } = SHELL;
+
+    const ceilingMat = new THREE.MeshStandardNodeMaterial({ color: '#efece6', roughness: 0.9, side: THREE.FrontSide });
+    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2), ceilingMat);
+    ceil.rotation.x = Math.PI / 2; // faces down
+    ceil.position.y = ceiling;
+    shell.add(ceil);
+
+    // Linear LED fixtures: emissive so bloom gives them a soft halo.
+    const stripMat = new THREE.MeshStandardNodeMaterial({ color: '#ffffff', emissive: '#fff8ee', emissiveIntensity: 2.2, roughness: 1 });
+    const strips = [];
+    for (let x = -24; x <= 24; x += 6) {
+        for (let z = -24; z <= 24; z += 12) {
+            const g = new THREE.PlaneGeometry(0.28, 8);
+            g.rotateX(Math.PI / 2);
+            g.translate(x, ceiling - 0.02, z);
+            strips.push(g);
+        }
+    }
+    shell.add(new THREE.Mesh(mergeGeometries(strips), stripMat));
+
+    // Walls: warm gray with a dark baseboard and a thin brand band.
+    const wallMat = new THREE.MeshStandardNodeMaterial({ color: '#e7e3dc', roughness: 0.85 });
+    const baseMat = new THREE.MeshStandardNodeMaterial({ color: '#2f2f3a', roughness: 0.6 });
+    const bandMat = new THREE.MeshStandardNodeMaterial({ color: '#4f46e5', roughness: 0.5, emissive: '#4f46e5', emissiveIntensity: 0.15 });
+    const sides = [
+        { pos: [0, 0, -half], rotY: 0 },
+        { pos: [0, 0, half], rotY: Math.PI },
+        { pos: [-half, 0, 0], rotY: Math.PI / 2 },
+        { pos: [half, 0, 0], rotY: -Math.PI / 2 }
+    ];
+    for (const s of sides) {
+        const wall = new THREE.Group();
+        wall.position.set(...s.pos);
+        wall.rotation.y = s.rotY;
+        const plane = (h, y, mat, inset = 0) => {
+            const m = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, h), mat);
+            m.position.set(0, y, inset);
+            m.receiveShadow = true;
+            wall.add(m);
+        };
+        plane(ceiling, ceiling / 2, wallMat);
+        plane(0.3, 0.15, baseMat, 0.01);
+        plane(0.12, 7.2, bandMat, 0.01);
+        shell.add(wall);
+    }
+    return shell;
 }
 
 function loadPickupItems(layout, parent, items) {

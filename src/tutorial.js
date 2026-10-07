@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import { setGazeEnabled } from './interaction.js';
 
 let currentStep = 1;

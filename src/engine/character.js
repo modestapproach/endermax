@@ -4,76 +4,98 @@
 
 import * as THREE from 'three/webgpu';
 import { uv, float, smoothstep, mix, color, uniform, time, sin } from 'three/tsl';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
 export const EYE_HEIGHT = 2.75;
-
-function capsule(radius, length, material) {
-    const m = new THREE.Mesh(new THREE.CapsuleGeometry(radius, length, 6, 16), material);
-    m.castShadow = true;
-    return m;
-}
 
 export function createCharacter(scene) {
     const person = new THREE.Group();
     person.name = 'shopper';
 
-    const suit = new THREE.MeshStandardNodeMaterial({ color: '#4f46e5', roughness: 0.45, metalness: 0.05 });
-    const skin = new THREE.MeshStandardNodeMaterial({ color: '#f4f2ee', roughness: 0.35, metalness: 0 });
-    const dark = new THREE.MeshStandardNodeMaterial({ color: '#1d1d27', roughness: 0.25, metalness: 0.3 });
-    const visorMat = new THREE.MeshPhysicalNodeMaterial({ color: '#0b0b14', roughness: 0.08, metalness: 0.2, clearcoat: 1, clearcoatRoughness: 0.05 });
-    const visorGlow = new THREE.MeshBasicNodeMaterial({ color: '#7dd3fc' });
+    const shell = new THREE.MeshPhysicalNodeMaterial({ color: '#f4f4f6', roughness: 0.45, clearcoat: 0.25, clearcoatRoughness: 0.4 });
+    const jacket = new THREE.MeshPhysicalNodeMaterial({ color: '#4f46e5', roughness: 0.55, sheen: 0.4, sheenColor: '#a5b4fc' });
+    const dark = new THREE.MeshStandardNodeMaterial({ color: '#2b2b35', roughness: 0.6, metalness: 0.05 });
+    const visorMat = new THREE.MeshPhysicalNodeMaterial({ color: '#1e1b4b', roughness: 0.06, metalness: 0.3, clearcoat: 1, clearcoatRoughness: 0.03, side: THREE.DoubleSide });
+    const visorGlow = new THREE.MeshStandardNodeMaterial({ color: '#818cf8', emissive: '#818cf8', emissiveIntensity: 1.6 });
 
-    // Hips/torso
     const pelvis = new THREE.Group();
     pelvis.position.y = 1.3;
     person.add(pelvis);
 
-    const torso = capsule(0.36, 0.55, suit);
-    torso.position.y = 0.55;
-    torso.scale.set(1, 1, 0.72);
+    // Tapered torso: lathe profile, hips -> waist -> chest -> shoulders.
+    const profile = [[0, 0], [0.3, 0.02], [0.33, 0.12], [0.3, 0.32], [0.36, 0.62], [0.42, 0.86], [0.38, 0.98], [0.18, 1.06], [0, 1.08]]
+        .map(([x, y]) => new THREE.Vector2(x, y));
+    const torso = new THREE.Mesh(new THREE.LatheGeometry(profile, 32), jacket);
+    torso.scale.set(1, 1, 0.68);
+    torso.castShadow = true;
     pelvis.add(torso);
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 0.14, 20), shell);
+    collar.position.y = 1.12;
+    pelvis.add(collar);
 
-    // Head with visor
+    // Head: slightly egg-shaped, wearing a wraparound MR headset whose
+    // glowing band makes the facing direction readable from any camera.
     const head = new THREE.Group();
     head.position.y = EYE_HEIGHT - 1.3;
     pelvis.add(head);
-    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.3, 32, 24), skin);
+    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.29, 40, 28), shell);
+    skull.scale.set(0.92, 1.08, 0.98);
     skull.castShadow = true;
     head.add(skull);
-    const visor = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.36, 4, 16), visorMat);
-    visor.rotation.z = Math.PI / 2;
-    visor.position.set(0, 0.02, -0.24);
-    visor.scale.set(1, 1, 0.75);
+    // Front visor: open cylinder spanning ~200 degrees around the face (-Z).
+    const visorArc = Math.PI * 1.1;
+    const visor = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.29, 0.17, 40, 1, true, Math.PI - visorArc / 2, visorArc), visorMat);
+    visor.position.y = 0.02;
+    visor.castShadow = true;
     head.add(visor);
-    const visorLine = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.012, 0.01), visorGlow);
-    visorLine.position.set(0, 0.0, -0.325);
-    head.add(visorLine);
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.305, 0.305, 0.018, 40, 1, true, Math.PI - visorArc / 2, visorArc), visorGlow);
+    band.position.y = -0.035;
+    head.add(band);
+    // Strap around the back of the head with a small status light.
+    const strap = new THREE.Mesh(new THREE.TorusGeometry(0.285, 0.022, 8, 40), dark);
+    strap.rotation.x = Math.PI / 2;
+    strap.position.y = 0.05;
+    head.add(strap);
+    const status = new THREE.Mesh(new THREE.SphereGeometry(0.022, 12, 8), visorGlow);
+    status.position.set(0, 0.05, 0.3);
+    head.add(status);
 
-    // Limbs hang from pivot groups so the walk cycle is a rotation.
-    function limb(x, y, radius, length, mat, parent) {
+    // Tapered limbs hang from pivots so the walk cycle is a rotation.
+    function limb(x, y, rTop, rBottom, length, mat, parent) {
         const pivot = new THREE.Group();
         pivot.position.set(x, y, 0);
-        const seg = capsule(radius, length, mat);
-        seg.position.y = -length / 2 - radius * 0.5;
+        const seg = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBottom, length, 16), mat);
+        seg.position.y = -length / 2;
+        seg.castShadow = true;
         pivot.add(seg);
+        const joint = new THREE.Mesh(new THREE.SphereGeometry(rTop, 16, 12), mat);
+        pivot.add(joint);
         parent.add(pivot);
         return pivot;
     }
-    const armL = limb(-0.46, 0.92, 0.095, 0.62, suit, pelvis);
-    const armR = limb(0.46, 0.92, 0.095, 0.62, suit, pelvis);
-    armL.rotation.z = -0.12;
-    armR.rotation.z = 0.12;
-    const handL = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), skin);
-    handL.position.y = -0.86; armL.add(handL);
-    const handR = handL.clone(); armR.add(handR);
+    const armL = limb(-0.43, 0.92, 0.085, 0.065, 0.78, jacket, pelvis);
+    const armR = limb(0.43, 0.92, 0.085, 0.065, 0.78, jacket, pelvis);
+    armL.rotation.z = -0.1;
+    armR.rotation.z = 0.1;
+    const handL = new THREE.Mesh(new THREE.SphereGeometry(0.075, 16, 12), shell);
+    handL.scale.set(1, 1.25, 0.8);
+    handL.position.y = -0.84;
+    armL.add(handL);
+    armR.add(handL.clone());
 
-    const legL = limb(-0.17, 0.0, 0.13, 0.92, dark, pelvis);
-    const legR = limb(0.17, 0.0, 0.13, 0.92, dark, pelvis);
-    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.12, 0.38), skin);
+    const legL = limb(-0.15, 0.04, 0.12, 0.08, 1.12, dark, pelvis);
+    const legR = limb(0.15, 0.04, 0.12, 0.08, 1.12, dark, pelvis);
+    const shoe = new THREE.Mesh(new RoundedBoxGeometry(0.17, 0.11, 0.32, 2, 0.04), shell);
     shoe.castShadow = true;
     shoe.position.set(0, -1.2, -0.06);
     legL.add(shoe);
     legR.add(shoe.clone());
+
+    // Brand selection ring
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.58, 0.63, 64), new THREE.MeshBasicNodeMaterial({ color: '#4f46e5', transparent: true, opacity: 0.8, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.006;
+    person.add(ring);
 
     // Contact shadow blob keeps the figure grounded even outside the key light.
     const blob = new THREE.Mesh(
@@ -155,7 +177,7 @@ export function createCharacter(scene) {
         pelvis.position.y = 1.3 + Math.abs(Math.cos(phase)) * 0.05 * stride;
         torso.rotation.y = Math.sin(phase) * 0.06 * stride;
         // Idle breathing
-        torso.scale.y = 1 + Math.sin(performance.now() * 0.002) * 0.008;
+        torso.scale.y = 1 + Math.sin(performance.now() * 0.002) * 0.01;
 
         const k = Math.min(dt * 8, 1);
         head.rotation.y += (headYaw - head.rotation.y) * k;

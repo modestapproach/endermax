@@ -23,10 +23,12 @@ export const flags = {
 
 // Named views. Free-camera presets pin the camera; pose presets move the shopper.
 export const CAMERA_PRESETS = {
-    hero:  { pose: { x: 2, z: 6, yaw: 0.35, pitch: 0.1 } },
-    aisle: { pose: { x: -7.5, z: 4, yaw: Math.PI / 2, pitch: 0 } },
-    fp:    { pose: { x: 0, z: 4, yaw: 0, pitch: 0 }, firstPerson: true },
+    hero:  { pose: { x: -0.5, z: 15, yaw: 0.28, pitch: 0.05 } },
+    aisle: { pose: { x: -0.75, z: 26, yaw: 0, pitch: -0.1 } },
+    fp:    { pose: { x: -1.6, z: 19, yaw: 0.32, pitch: -0.06 }, firstPerson: true },
     top:   { free: { pos: [0.01, 46, 0], target: [0, 0, 0], fov: 55 } },
+    // Near-orthographic isometric: the "architectural maquette" overview.
+    iso:   { free: { pos: [62, 62, 62], target: [0, 0, 0], fov: 30 } },
     wide:  { free: { pos: [22, 16, 24], target: [-2, 1.5, 0], fov: 50 } }
 };
 
@@ -86,7 +88,7 @@ async function contactSheet(entries, cellW = 640, cellH = 400) {
 }
 
 export function installDevtools(api) {
-    const { renderer, camera, layout, heat, captureFrame, capturePlan, setPose, setFirstPerson, setPointer, getPose, setFreeCamera, info } = api;
+    const { renderer, camera, layout, heat, captureFrame, capturePlan, setPose, setFirstPerson, setPointer, getPose, setFreeCamera, simulateSession, info } = api;
 
     const endermax = {
         layout, heat, camera, renderer,
@@ -103,6 +105,8 @@ export function installDevtools(api) {
             return name;
         },
         demoHeat: (seed) => createDemoHeat(layout, heat, seed),
+        // Scripted shopper run saved as a real session; then open /results.html.
+        simulateSession: (opts) => simulateSession(opts),
         clearHeat: () => heat.reset(),
         stats: () => info(),
         // Renders and saves the current view; resolves to the saved path.
@@ -115,7 +119,7 @@ export function installDevtools(api) {
         },
         // Shoots every named preset plus the plan map, and a contact sheet of
         // all of them (<prefix>-sheet.jpg) for one-glance review.
-        async tour(prefix = 'tour', names = ['hero', 'wide', 'top', 'fp', 'aisle'], size = { width: 1280, height: 800 }) {
+        async tour(prefix = 'tour', names = ['hero', 'aisle', 'fp', 'iso', 'wide'], size = { width: 1280, height: 800 }) {
             const out = [];
             const urls = [];
             for (const n of names) {

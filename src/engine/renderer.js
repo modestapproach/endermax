@@ -2,7 +2,7 @@
 // shadows, and a TSL post stack: GTAO contact shadows + bloom on heat glow.
 
 import * as THREE from 'three/webgpu';
-import { pass, mrt, output, normalView, emissive, builtinAOContext, screenUV, vec4 } from 'three/tsl';
+import { pass, mrt, output, normalView, emissive, builtinAOContext, screenUV, vec4, vec3, float, smoothstep, length } from 'three/tsl';
 import { ao } from 'three/examples/jsm/tsl/display/GTAONode.js';
 import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -40,7 +40,7 @@ export function createLighting(scene, renderer) {
 
     // Key light: high, slightly warm, casting the whole store's shadows.
     const sun = new THREE.DirectionalLight('#fff1e0', 2.8);
-    sun.position.set(14, 30, 10);
+    sun.position.set(7, 30, 5); // high, like overhead store lighting
     sun.castShadow = true;
     sun.shadow.mapSize.set(4096, 4096);
     const s = sun.shadow.camera;
@@ -81,6 +81,10 @@ export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloo
         bloomPass = bloom(scenePass.getTextureNode('emissive'), 0.9, 0.35, 0.0);
         out = out.add(vec4(bloomPass.rgb, 0));
     }
+
+    // Gentle vignette pulls the eye toward the center of the frame.
+    const v = smoothstep(float(0.45), float(1.05), length(screenUV.sub(0.5)).mul(1.5));
+    out = out.mul(vec4(vec3(v.mul(-0.16).add(1)), 1));
 
     pipeline.outputNode = out;
     return { pipeline, scenePass, aoPass, bloomPass };

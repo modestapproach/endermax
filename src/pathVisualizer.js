@@ -49,6 +49,8 @@ export class PathVisualizer {
 
     update(position) {
         if (this.count > 0 && position.distanceTo(this.lastPosition) < this.minDistance) return;
+        // A jump no one could walk (teleport/dev pose) starts a fresh trail.
+        if (this.count > 0 && position.distanceTo(this.lastPosition) > 3) this.reset();
         this.addPoint(position);
     }
 

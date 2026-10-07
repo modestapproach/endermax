@@ -23,6 +23,8 @@ export function getCurrentGaze() {
 export function setGazeEnabled(enabled) { gazeEnabled = enabled; }
 export function getIsDragging() { return isDragging; }
 export function getIsFirstPerson() { return isFirstPerson; }
+export const FOV = { third: 54, first: 70 };
+export function getDesiredFov() { return isFirstPerson ? FOV.first : FOV.third; }
 
 // Dev/automation hooks (window.endermax) — direct pose control.
 export function setPose({ x, z, yaw: y, pitch: p } = {}) {
@@ -211,15 +213,22 @@ function updateCamera(dt) {
     }
     ctx.character.person.visible = true;
 
-    // Orbit behind and above the head; pitch raises/lowers the orbit.
-    const radius = 6.2;
-    const elev = THREE.MathUtils.clamp(0.42 + pitch * 0.6, 0.05, 1.1);
+    // Over-the-shoulder: behind, a little above, offset right so the shopper
+    // sits left of center and the view ahead stays open. Pitch tilts the orbit.
+    const radius = 5.4;
+    const side = 0.95;
+    const elev = THREE.MathUtils.clamp(0.3 + pitch * 0.6, 0.02, 1.1);
+    const rx = Math.cos(yaw), rz = -Math.sin(yaw); // camera right
     _camPos.set(
-        person.position.x + Math.sin(yaw) * Math.cos(elev) * radius,
-        person.position.y + EYE_HEIGHT + Math.sin(elev) * radius,
-        person.position.z + Math.cos(yaw) * Math.cos(elev) * radius
+        person.position.x + Math.sin(yaw) * Math.cos(elev) * radius + rx * side,
+        person.position.y + EYE_HEIGHT + 0.3 + Math.sin(elev) * radius,
+        person.position.z + Math.cos(yaw) * Math.cos(elev) * radius + rz * side
     );
-    _camTarget.set(person.position.x - Math.sin(yaw) * 1.2, person.position.y + EYE_HEIGHT - 0.1, person.position.z - Math.cos(yaw) * 1.2);
+    _camTarget.set(
+        person.position.x - Math.sin(yaw) * 4 + rx * side * 0.6,
+        person.position.y + EYE_HEIGHT - 0.35,
+        person.position.z - Math.cos(yaw) * 4 + rz * side * 0.6
+    );
 
     const k = snapCamera ? 1 : 1 - Math.exp(-10 * dt);
     camera.position.lerp(_camPos, k);
