@@ -39,7 +39,42 @@ const cutoutMask = cutoutInFront.mul(step(cutoutDist, cutout.radius)).lessThan(0
 const cutoutRim = cutoutInFront.mul(smoothstep(cutout.radius.mul(1.06), cutout.radius.mul(1.0), cutoutDist));
 const withRim = (col) => mix(col, color('#6366f1'), cutoutRim.mul(0.45));
 
-export function createMaterials(heatNodes, textures) {
+// Contact shading baked from the layout (replaces GTAO outside "high"):
+// a blurred plan-occupancy map darkens the floor around fixture bases.
+function bakeFloorAO(layout) {
+    const { x: nx, z: nz } = layout.dims;
+    const o = layout.origin;
+    const S = 4; // texels per cell
+    const W = nx * S, H = nz * S;
+    let occ = new Float32Array(W * H);
+    for (const c of layout.cells.values()) {
+        if (c.gy > 10) continue;
+        const ix = (c.gx - o.gx) * S, iz = (c.gz - o.gz) * S;
+        for (let a = 0; a < S; a++) for (let b = 0; b < S; b++) occ[(iz + b) * W + ix + a] = 1;
+    }
+    const blur = (src, r, horizontal) => {
+        const out = new Float32Array(W * H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            let acc = 0, n = 0;
+            for (let k = -r; k <= r; k++) {
+                const xx = horizontal ? x + k : x, yy = horizontal ? y : y + k;
+                if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+                acc += src[yy * W + xx]; n++;
+            }
+            out[y * W + x] = acc / n;
+        }
+        return out;
+    };
+    occ = blur(blur(blur(blur(occ, 3, true), 3, false), 3, true), 3, false);
+    const data = new Uint8Array(W * H);
+    for (let i = 0; i < W * H; i++) data[i] = Math.round(255 * (1 - Math.min(occ[i] * 1.6, 1)));
+    const tex = new THREE.DataTexture(data, W, H, THREE.RedFormat, THREE.UnsignedByteType);
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    return { tex, nx, nz, o };
+}
+
+export function createMaterials(heatNodes, textures, layout) {
     const { tint, tintFixture, glow } = heatNodes;
 
     const fixture = new THREE.MeshStandardNodeMaterial({ roughness: 0.62, metalness: 0 });
@@ -47,7 +82,9 @@ export function createMaterials(heatNodes, textures) {
     const fixtureBase = mix(color(PALETTE.fixture), color(PALETTE.fixtureEdge), mx_noise_float(positionWorld.mul(0.9)).mul(0.5).add(0.5).mul(0.35));
     // Plain fixtures only show heat that's genuinely high, so AoE bleed from
     // product faces doesn't wash end caps and side panels.
-    fixture.colorNode = withRim(tintFixture(fixtureBase));
+    // Fixtures darken slightly toward the floor (cheap stand-in for AO).
+    const baseShade = mix(float(0.8), float(1), smoothstep(float(0), float(0.9), positionWorld.y));
+    fixture.colorNode = withRim(tintFixture(fixtureBase.mul(baseShade)));
     fixture.emissiveNode = glow;
     fixture.maskNode = cutoutMask;
 
@@ -104,7 +141,14 @@ export function createMaterials(heatNodes, textures) {
     const gx = abs(fract(tile.x).sub(0.5));
     const gy = abs(fract(tile.y).sub(0.5));
     const line = smoothstep(0.485, 0.497, max(gx, gy));
-    floor.colorNode = mix(mix(color(PALETTE.floorA), color(PALETTE.floorB), n), color(PALETTE.grid), line.mul(0.55));
+    const ao = bakeFloorAO(layout);
+    // World xz -> AO texel (cell centers at g * 0.5, texture spans the layout grid).
+    const aoUV = vec2(
+        positionWorld.x.div(0.5).sub(ao.o.gx - 0.5).div(ao.nx),
+        positionWorld.z.div(0.5).sub(ao.o.gz - 0.5).div(ao.nz)
+    );
+    const contact = mix(float(0.62), float(1), texture(ao.tex, aoUV).r);
+    floor.colorNode = mix(mix(color(PALETTE.floorA), color(PALETTE.floorB), n), color(PALETTE.grid), line.mul(0.55)).mul(contact);
     floor.roughnessNode = mix(float(0.2), float(0.38), n);
 
     return { fixture, accent, metal, base, trim, image, sign, floor };

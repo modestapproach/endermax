@@ -4,7 +4,7 @@ import './ui.css';
 import { parseLayout } from './engine/layout.js';
 import { HeatField, createHeatNodes } from './engine/heat.js';
 import { buildWorld } from './engine/world.js';
-import { createRenderer, createLighting, createPipeline, backendName } from './engine/renderer.js';
+import { createRenderer, createLighting, createPipeline, backendName, QUALITY_FLAGS, QUALITY_NAME, setQualityPreset } from './engine/renderer.js';
 import { createCharacter } from './engine/character.js';
 import { drawPlanMap } from './engine/planMap.js';
 import { cutout } from './engine/materials.js';
@@ -33,6 +33,7 @@ let emotionState, recorder, faceDetector, voiceAgent;
 let isTestActive = false;
 let freeCamera = null;
 let storeFog = null;
+let lights = null;
 const clock = new THREE.Clock();
 const planCanvas = document.createElement('canvas');
 
@@ -54,7 +55,7 @@ async function init() {
     layout = parseLayout();
     heat = new HeatField(layout);
     const heatNodes = createHeatNodes(heat);
-    createLighting(scene, renderer);
+    lights = createLighting(scene, renderer);
     storeFog = scene.fog;
     world = buildWorld(layout, heatNodes);
     scene.add(world.group);
@@ -79,6 +80,12 @@ async function init() {
     promptManager.setGameLogic(gameLogic);
     voiceAgent = new VoiceAgent();
 
+    const qualitySelect = document.getElementById('qualitySelect');
+    if (qualitySelect) {
+        qualitySelect.value = QUALITY_NAME;
+        qualitySelect.addEventListener('change', () => { setQualityPreset(qualitySelect.value); location.reload(); });
+    }
+
     window.gameLogic = gameLogic;
     window.voiceAgent = voiceAgent;
     window.recorder = recorder;
@@ -88,7 +95,9 @@ async function init() {
         setPose, setFirstPerson, setPointer, getPose, setFreeCamera: (c) => { freeCamera = c; }, simulateSession,
         info: () => ({
             backend: backendName(renderer), fps,
-            drawCalls: renderer.info.render.drawCalls, triangles: renderer.info.render.triangles
+            drawCalls: perf.draws, triangles: perf.tris,
+            cpuTickMs: +perf.tick.toFixed(2), cpuRenderMs: +perf.render.toFixed(2), gpuMs: +perf.gpu.toFixed(2),
+            quality: QUALITY_NAME, pixelRatio: renderer.getPixelRatio(), drawingBuffer: renderer.getDrawingBufferSize(new THREE.Vector2()).toArray()
         })
     });
 
@@ -108,6 +117,7 @@ async function init() {
 }
 
 function renderFrame() {
+    if (world.shadowsDirty) { lights.sun.shadow.needsUpdate = true; world.shadowsDirty = false; }
     heat.flush();
     post.pipeline.render();
 }
@@ -310,11 +320,38 @@ viewResultsBtn?.addEventListener('click', async () => {
     window.location.href = '/results.html';
 });
 
-function animate() {
+// Rolling frame-cost averages (ms) for the perf HUD and npm run bench.
+const perf = { tick: 0, render: 0, gpu: 0, frames: 0 };
+const ema = (prev, v) => prev ? prev * 0.95 + v * 0.05 : v;
+
+// Frame pacing: cap at the preset's fps (120Hz displays would otherwise do
+// double the work), and drop to ~20fps after a few seconds without input.
+let lastInput = performance.now();
+let lastFrame = 0;
+for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel']) {
+    window.addEventListener(ev, () => { lastInput = performance.now(); }, { passive: true });
+}
+
+function animate(time = performance.now()) {
     if (capturing) return; // don't present a different frame mid-capture
+    const idle = time - lastInput > 3000 && !isTestActive;
+    const cap = idle ? Math.min(QUALITY_FLAGS.fps || 60, 20) : QUALITY_FLAGS.fps;
+    if (cap && time - lastFrame < 1000 / cap - 1) return;
+    lastFrame = time;
     const dt = Math.min(clock.getDelta(), 0.1);
+    const t0 = performance.now();
     tick(dt);
+    const t1 = performance.now();
     renderFrame();
+    const t2 = performance.now();
+    perf.tick = ema(perf.tick, t1 - t0);
+    perf.render = ema(perf.render, t2 - t1);
+    perf.draws = renderer.info.render.drawCalls; // sampled on rendered frames (capped frames skip)
+    perf.tris = renderer.info.render.triangles;
+    perf.frames++;
+    if (renderer.backend.trackTimestamp && perf.frames % 10 === 0) {
+        renderer.resolveTimestampsAsync('render').then(ms => { if (ms) perf.gpu = ema(perf.gpu, ms); }).catch(() => {});
+    }
 
     frameCount++;
     const now = performance.now();

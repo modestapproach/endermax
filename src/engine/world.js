@@ -37,14 +37,25 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         const url = matted ? matted[1] : urlFor(textureUrls, id);
         if (url) textures.set(id, loadTexture(url));
     }
-    const mats = createMaterials(heatNodes, textures);
+    const mats = createMaterials(heatNodes, textures, layout);
 
     const fixtureGeos = [];
     const baseGeos = [];
     const metalGeos = [];
     const accentGeos = [];
     const trimGeos = [];
+    // Raycasts (gaze, camera arm) hit invisible box proxies, never the merged
+    // render meshes: the store is boxes, and testing 12 triangles per fixture
+    // instead of every bevel triangle took gaze from ~9ms to well under 1ms.
     const raycastTargets = [];
+    const addProxy = (sx, sy, sz, x, y, z, userData = {}) => {
+        const p = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), PROXY_MATERIAL);
+        p.position.set(x, y, z);
+        p.userData = userData;
+        p.updateMatrixWorld(true);
+        raycastTargets.push(p);
+        return p;
+    };
 
     // Wall columns: rounded boxes floor to top of level 10.
     for (const r of layout.columns) {
@@ -53,6 +64,7 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         const cx = (r.gx0 + r.gx1) / 2 * UNIT;
         const cz = (r.gz0 + r.gz1) / 2 * UNIT;
         fixtureGeos.push(boxAt(new RoundedBoxGeometry(w, Y_TOP_WALL - Y_KICK, d, 2, 0.035), cx, (Y_TOP_WALL + Y_KICK) / 2, cz));
+        addProxy(w, Y_TOP_WALL, d, cx, Y_TOP_WALL / 2, cz);
         baseGeos.push(boxAt(new THREE.BoxGeometry(w - 0.02, Y_KICK, d - 0.02), cx, Y_KICK / 2, cz));
         trimGeos.push(boxAt(new RoundedBoxGeometry(w + 0.05, 0.07, d + 0.05, 1, 0.02), cx, Y_TOP_WALL + 0.035, cz));
     }
@@ -84,7 +96,7 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         mesh.receiveShadow = true;
         mesh.userData.kind = p.kind;
         group.add(mesh);
-        raycastTargets.push(mesh);
+        addProxy(sx, isSign ? y1 - y0 : y1, sz, cx, isSign ? (y0 + y1) / 2 : y1 / 2, cz, { kind: p.kind });
 
         if (!isSign) {
             baseGeos.push(boxAt(new THREE.BoxGeometry(sx - 0.02, Y_KICK, sz - 0.02), cx, Y_KICK / 2, cz));
@@ -100,6 +112,7 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         const y0 = 13 * UNIT;
         const y1 = 21.5 * UNIT; // up to the ceiling
         metalGeos.push(boxAt(new THREE.CylinderGeometry(0.018, 0.018, y1 - y0, 8), h.gx * UNIT, (y0 + y1) / 2, h.gz * UNIT));
+        addProxy(0.08, y1 - y0, 0.08, h.gx * UNIT, (y0 + y1) / 2, h.gz * UNIT);
     }
 
     // Open shelving units ('e'): boards at each level plus uprights.
@@ -108,9 +121,11 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
             fixtureGeos.push(boxAt(new THREE.BoxGeometry(UNIT, 0.05, UNIT), s.gx * UNIT, lvl * UNIT, s.gz * UNIT));
         }
         metalGeos.push(boxAt(new THREE.BoxGeometry(0.04, Y_TOP_WALL, 0.04), s.gx * UNIT, Y_TOP_WALL / 2, s.gz * UNIT));
+        addProxy(UNIT, Y_TOP_WALL, UNIT, s.gx * UNIT, Y_TOP_WALL / 2, s.gz * UNIT);
     }
     for (const t of layout.talls) {
         fixtureGeos.push(boxAt(new RoundedBoxGeometry(UNIT, 4.5 * UNIT, UNIT, 2, 0.03), t.gx * UNIT, 2.25 * UNIT, t.gz * UNIT));
+        addProxy(UNIT, 4.5 * UNIT, UNIT, t.gx * UNIT, 2.25 * UNIT, t.gz * UNIT);
     }
 
     const addMerged = (geos, material, name, castShadow = true) => {
@@ -123,7 +138,6 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         mesh.castShadow = castShadow;
         mesh.receiveShadow = true;
         group.add(mesh);
-        raycastTargets.push(mesh);
         return mesh;
     };
     addMerged(fixtureGeos, mats.fixture, 'fixtures');
@@ -148,7 +162,8 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
     const items = [];
     const itemGroup = new THREE.Group();
     group.add(itemGroup);
-    if (loadItems) loadPickupItems(layout, itemGroup, items);
+    const world = { group, floor, items, itemsRoot: itemGroup, raycastTargets, materials: mats, cellFromHit: null, shadowsDirty: true };
+    if (loadItems) loadPickupItems(layout, itemGroup, items, () => { world.shadowsDirty = true; });
 
     // --- Hit -> cell mapping ------------------------------------------------
     const _n = new THREE.Vector3();
@@ -170,7 +185,8 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         return null;
     }
 
-    return { group, floor, items, itemsRoot: itemGroup, raycastTargets, materials: mats, cellFromHit };
+    world.cellFromHit = cellFromHit;
+    return world;
 }
 
 export const SHELL = { half: 30, ceiling: 21.5 * UNIT };
@@ -228,7 +244,9 @@ function buildShell(mats) {
     return shell;
 }
 
-function loadPickupItems(layout, parent, items) {
+const PROXY_MATERIAL = new THREE.MeshBasicNodeMaterial({ visible: false });
+
+function loadPickupItems(layout, parent, items, onLoaded) {
     const loader = new GLTFLoader();
     for (const it of layout.items) {
         const url = urlFor(modelUrls, it.id);
@@ -238,6 +256,12 @@ function loadPickupItems(layout, parent, items) {
         anchor.userData = userData;
         parent.add(anchor);
         items.push(anchor);
+        // Cheap gaze proxy (models can be tens of thousands of triangles).
+        const proxy = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.7, 0.75), PROXY_MATERIAL);
+        proxy.position.set(anchor.position.x, 0.35, anchor.position.z);
+        proxy.userData = userData;
+        proxy.updateMatrixWorld(true);
+        anchor.userData = { ...userData, proxy };
 
         // Pickup marker: a soft accent ring on the floor.
         const ring = new THREE.Mesh(
@@ -269,6 +293,7 @@ function loadPickupItems(layout, parent, items) {
                 if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; n.userData = userData; }
             });
             anchor.add(model);
+            onLoaded?.();
         }, undefined, (e) => console.warn(`Item model ${it.id} failed to load`, e));
     }
 }

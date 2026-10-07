@@ -1758,3 +1758,10 @@ audio.hidden,
 .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18); }
 
 .items-section h3 { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-secondary); font-weight: 600; }
+
+.quality-select {
+    width: 100%; margin-top: 0.4rem; padding: 0.45rem 0.6rem; border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06); color: #e5e7eb; border: 1px solid rgba(255, 255, 255, 0.14);
+    font: inherit;
+}
+.quality-select option { color: #111; }

@@ -21,6 +21,10 @@ let sessionTranscriptions = [];
 let onSnapshotSelected = null;
 let savedView = null;
 let container = null;
+let fly = null; // { pos, target } while flying to a selected snapshot
+let loopTicks = 0, renderedFrames = 0;
+let renderFrames = 4; // a few frames lets lazily loaded textures/models land
+function requestRender(frames = 2) { renderFrames = Math.max(renderFrames, frames); }
 window.lastClickedSnapshotTimestamp = null;
 
 export function setOnSnapshotSelected(callback) { onSnapshotSelected = callback; }
@@ -54,8 +58,11 @@ export async function initViewer(containerElement, sessionId, passedSnapshots = 
     heat = new HeatField(layout);
     heat.load(session.heatmapData);
     heat.flush();
-    createLighting(scene, renderer);
+    const lights = createLighting(scene, renderer);
     world = buildWorld(layout, createHeatNodes(heat));
+    // Textures/models arrive async; repaint once they land (and once fonts do).
+    THREE.DefaultLoadingManager.onLoad = () => requestRender(6);
+    setTimeout(() => requestRender(4), 1500);
     scene.add(world.group);
     post = createPipeline(renderer, scene, camera);
 
@@ -94,9 +101,9 @@ export async function initViewer(containerElement, sessionId, passedSnapshots = 
         camera.position.copy(savedView.position);
         controls.target.copy(savedView.target);
     } else {
-        const start = session.pathPoints?.[0] || { x: 0, z: 0 };
-        camera.position.set(start.x + 14, 18, start.z + 18);
-        controls.target.set(start.x, 1.5, start.z);
+        // Overview of the store from a high three-quarter angle.
+        camera.position.set(20, 26, 30);
+        controls.target.set(0, 0, 0);
     }
     controls.update();
 
@@ -104,12 +111,30 @@ export async function initViewer(containerElement, sessionId, passedSnapshots = 
     canvas.addEventListener('pointerup', onPointerUp);
     window.addEventListener('resize', onWindowResize);
 
+    // Render on demand: only while the orbit moves (incl. damping) or after a
+    // selection/resize — a static replay costs nothing between interactions.
+    controls.addEventListener('change', () => requestRender());
     renderer.setAnimationLoop(() => {
+        if (fly) {
+            // Ease camera + target toward the selected moment.
+            camera.position.lerp(fly.pos, 0.12);
+            controls.target.lerp(fly.target, 0.12);
+            if (camera.position.distanceTo(fly.pos) < 0.05) fly = null;
+            requestRender();
+        }
         controls.update();
-        post.pipeline.render();
+        if (world?.shadowsDirty) { lights.sun.shadow.needsUpdate = true; world.shadowsDirty = false; requestRender(); }
+        loopTicks++;
+        if (renderFrames > 0) {
+            renderFrames--;
+            renderedFrames++;
+            post.pipeline.render();
+        }
     });
 
     if (window.lastSelectedTimestamp) setTimeout(() => selectSnapshot(window.lastSelectedTimestamp), 100);
+    // The live instance, for automation (a dynamic import can load a second copy under HMR).
+    window.__endermaxViewer = { selectSnapshot, getViewerDebug };
 }
 
 function pinTexture(emoji) {
@@ -151,6 +176,7 @@ function updateGhostAvatar(snap) {
     const normal = hit?.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
     ghost.setGaze(true, origin, dir, hit, normal);
     ghost.animate(1, 0, 0, 0);
+    requestRender(30);
 }
 
 let downAt = null;
@@ -168,6 +194,7 @@ function onPointerUp(e) {
     window.lastClickedSnapshotTimestamp = snap.timestamp;
     showPopup(snap);
     updateGhostAvatar(snap);
+    flyTo(snap);
     onSnapshotSelected?.(snap.timestamp);
 }
 
@@ -178,8 +205,18 @@ export function selectSnapshot(timestamp) {
     window.lastClickedSnapshotTimestamp = snap.timestamp;
     showPopup(snap);
     updateGhostAvatar(snap);
-    // Glide the orbit target to the moment.
-    if (controls) controls.target.set(snap.position.x, 1.5, snap.position.z);
+    flyTo(snap);
+}
+
+// Frame the selected moment: keep the current viewing direction, but come in
+// to a readable distance with the shopper on screen.
+function flyTo(snap) {
+    if (!controls) return;
+    const target = new THREE.Vector3(snap.position.x, 1.5, snap.position.z);
+    const dir = camera.position.clone().sub(controls.target).normalize();
+    if (dir.y < 0.35) { dir.y = 0.35; dir.normalize(); }
+    fly = { target, pos: target.clone().addScaledVector(dir, 14) };
+    requestRender();
 }
 
 export function disposeViewer() {
@@ -197,6 +234,7 @@ export function disposeViewer() {
     window.removeEventListener('resize', onWindowResize);
     document.getElementById('viewer-popup')?.remove();
     scene = camera = controls = world = heat = post = pathVisualizer = null;
+    fly = null;
     snapshotNodes = [];
     ghost = null;
 }
@@ -207,6 +245,7 @@ function onWindowResize() {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h, false);
+    requestRender();
 }
 
 function escapeHtml(s) {
@@ -252,4 +291,10 @@ function showPopup(snap) {
             ${tile(snap.screenshot, 'View')}${tile(snap.birdsEyeScreenshot, 'Plan')}
         </div>`;
     popup.style.display = 'block';
+}
+
+// Dev/e2e introspection.
+export function getViewerDebug() {
+    const p = ghost?.person;
+    return { ghost: p ? { pos: p.position.toArray(), inScene: !!p.parent } : null, cam: camera?.position.toArray(), target: controls?.target.toArray(), fly: !!fly, loopTicks, renderedFrames, renderFrames };
 }

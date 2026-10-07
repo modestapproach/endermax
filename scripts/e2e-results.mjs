@@ -36,7 +36,7 @@ await page.screenshot({ path: `.shots/${prefix}-replay.png` });
 
 // Select a mid-session snapshot through the public viewer API.
 const picked = await page.evaluate(async () => {
-    const { selectSnapshot } = await import('/src/viewer.js');
+    const { selectSnapshot } = window.__endermaxViewer;
     const { db } = await import('/src/db.js');
     const last = await db.sessions.orderBy('id').last();
     const snaps = await db.snapshots.where('sessionId').equals(last.id).sortBy('timestamp');
@@ -46,6 +46,14 @@ const picked = await page.evaluate(async () => {
 });
 await page.waitForTimeout(1500);
 await page.screenshot({ path: `.shots/${prefix}-replay-selected.png` });
+// Nudge the orbit (real drag) and shoot again: on-demand rendering must repaint.
+await page.mouse.move(400, 500);
+await page.mouse.down();
+await page.mouse.move(430, 505, { steps: 5 });
+await page.mouse.up();
+await page.waitForTimeout(1200);
+await page.screenshot({ path: `.shots/${prefix}-replay-orbit.png` });
+const viewerState = await page.evaluate(() => window.__endermaxViewer.getViewerDebug());
 
-console.log(JSON.stringify({ sessionId, opened, picked, errors: [...new Set(errors)].slice(0, 15) }, null, 2));
+console.log(JSON.stringify({ sessionId, opened, picked, viewerState, errors: [...new Set(errors)].slice(0, 15) }, null, 2));
 await browser.close();

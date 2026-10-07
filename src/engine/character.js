@@ -117,6 +117,8 @@ export function createCharacter(scene) {
     blob.position.y = 0.004;
     person.add(blob);
 
+    // Static shadow map: the figure doesn't cast; its contact blob grounds it.
+    person.traverse(o => { o.castShadow = false; });
     scene.add(person);
 
     // --- Gaze beam + reticle (world space, not parented) ------------------

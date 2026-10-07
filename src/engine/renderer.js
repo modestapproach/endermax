@@ -8,10 +8,38 @@ import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { PALETTE } from './materials.js';
 
-export async function createRenderer({ canvas, width = window.innerWidth, height = window.innerHeight, quality = 'high' } = {}) {
-    const forceWebGL = new URLSearchParams(location.search).has('webgl');
-    const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, alpha: false, forceWebGL });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality === 'high' ? 2 : 1.25));
+const q = new URLSearchParams(location.search);
+
+// Graphics presets. Measured at 2880x1800 (M-series, WebGPU): GTAO alone was
+// ~10ms of a 13.7ms GPU frame, so only "high" pays for it; everything else
+// uses baked contact shading. fps is the render cap (input-idle drops lower).
+export const PRESETS = {
+    battery:  { dpr: 1,   msaa: false, ao: false, bloom: false, fps: 30 },
+    balanced: { dpr: 1.5, msaa: true,  ao: false, bloom: true,  fps: 60 },
+    high:     { dpr: 2,   msaa: true,  ao: true,  bloom: true,  fps: 60 }
+};
+function storedPreset() {
+    try { return localStorage.getItem('endermax.quality'); } catch { return null; }
+}
+export const QUALITY_NAME = PRESETS[q.get('quality')] ? q.get('quality') : (PRESETS[storedPreset()] ? storedPreset() : 'balanced');
+const preset = PRESETS[QUALITY_NAME];
+// Individual overrides for benchmarking: ?dpr=1.5 ?msaa=0 ?ao=0 ?bloom=0 ?fps=0 (uncapped)
+export const QUALITY_FLAGS = {
+    dpr: q.has('dpr') ? parseFloat(q.get('dpr')) : preset.dpr,
+    msaa: q.has('msaa') ? q.get('msaa') !== '0' : preset.msaa,
+    ao: q.has('ao') ? q.get('ao') !== '0' : preset.ao,
+    bloom: q.has('bloom') ? q.get('bloom') !== '0' : preset.bloom,
+    fps: q.has('fps') ? parseFloat(q.get('fps')) : preset.fps
+};
+export function setQualityPreset(name) {
+    try { localStorage.setItem('endermax.quality', name); } catch { /* private mode */ }
+}
+
+export async function createRenderer({ canvas, width = window.innerWidth, height = window.innerHeight } = {}) {
+    const forceWebGL = q.has('webgl');
+    const trackTimestamp = new URLSearchParams(location.search).has('bench'); // GPU timing for perf work
+    const renderer = new THREE.WebGPURenderer({ canvas, antialias: QUALITY_FLAGS.msaa, alpha: false, forceWebGL, trackTimestamp });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY_FLAGS.dpr));
     renderer.setSize(width, height, !!canvas ? false : true);
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 0.95;
@@ -48,6 +76,10 @@ export function createLighting(scene, renderer) {
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.02;
     sun.shadow.radius = 6;
+    // The store is static: render the 4K shadow map once (and when items load),
+    // not every frame. The shopper uses a contact blob instead of casting.
+    sun.shadow.autoUpdate = false;
+    sun.shadow.needsUpdate = true;
     scene.add(sun);
     scene.add(sun.target);
 
@@ -55,7 +87,7 @@ export function createLighting(scene, renderer) {
 }
 
 // Post stack. Returns a pipeline whose .render() replaces renderer.render().
-export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloomEnabled = true } = {}) {
+export function createPipeline(renderer, scene, camera, { aoEnabled = QUALITY_FLAGS.ao, bloomEnabled = QUALITY_FLAGS.bloom } = {}) {
     const pipeline = new THREE.RenderPipeline(renderer);
 
     const scenePass = pass(scene, camera);
@@ -63,15 +95,14 @@ export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloo
     const color = scenePass.getTextureNode('output');
     let out = color;
 
-    // Single-sample pre-pass for GTAO: depth + view normals.
-    const prePass = pass(scene, camera, { samples: 0 });
-    prePass.setMRT(mrt({ output: normalView }));
-    prePass.transparent = false;
-    const preDepth = prePass.getTextureNode('depth');
-    const preNormal = prePass.getTextureNode();
-
     let aoPass = null;
     if (aoEnabled) {
+        // Single-sample pre-pass for GTAO: depth + view normals.
+        const prePass = pass(scene, camera, { samples: 0 });
+        prePass.setMRT(mrt({ output: normalView }));
+        prePass.transparent = false;
+        const preDepth = prePass.getTextureNode('depth');
+        const preNormal = prePass.getTextureNode();
         aoPass = ao(preDepth, preNormal, camera);
         aoPass.resolutionScale = 0.5;
         aoPass.radius.value = 0.6;

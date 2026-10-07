@@ -408,6 +408,15 @@
 
         <!-- Bottom Controls -->
         <div id="controlsPanel" class="glass-card controls-panel">
+            <!-- Graphics quality (applies on reload) -->
+            <div class="control-group">
+                <label class="control-label" for="qualitySelect">Graphics</label>
+                <select id="qualitySelect" class="quality-select">
+                    <option value="battery">Battery saver: 30 fps, lower resolution</option>
+                    <option value="balanced">Balanced (recommended)</option>
+                    <option value="high">High: ambient occlusion, full Retina</option>
+                </select>
+            </div>
             <!-- Reset Button -->
             <div class="control-group">
                 <button id="resetBtn" class="btn btn-danger">

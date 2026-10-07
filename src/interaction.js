@@ -295,10 +295,14 @@ const _dir = new THREE.Vector3();
 const _normal = new THREE.Vector3();
 const _local = new THREE.Vector3();
 let _targets = null;
+let _targetsItemCount = -1;
 
 function gazeTargets() {
-    // Items are raycast recursively through their root group (models load async).
-    if (!_targets) _targets = [...ctx.world.raycastTargets, ctx.world.floor, ctx.world.itemsRoot];
+    // Fixture + item proxies (rebuilt when an item is picked up) and the floor.
+    if (!_targets || _targetsItemCount !== ctx.world.items.length) {
+        _targets = [...ctx.world.raycastTargets, ctx.world.floor, ...ctx.world.items.map(i => i.userData.proxy).filter(Boolean)];
+        _targetsItemCount = ctx.world.items.length;
+    }
     return _targets;
 }
 
@@ -332,7 +336,7 @@ export function updateGaze(dt) {
     let hit = null;
 
     if (isFirstPerson) {
-        const hits = _raycaster.intersectObjects(gazeTargets(), true);
+        const hits = _raycaster.intersectObjects(gazeTargets(), false);
         hit = hits[0] || null;
         currentGaze.origin.copy(_raycaster.ray.origin);
         currentGaze.direction.copy(_raycaster.ray.direction);
@@ -341,7 +345,7 @@ export function updateGaze(dt) {
         // Aim where the cursor points, ignoring anything between the camera
         // and the shopper (it's cut away on screen), then cast from the eyes.
         const camToPerson = camera.position.distanceTo(person.position) - 0.5;
-        const camHits = _raycaster.intersectObjects(gazeTargets(), true);
+        const camHits = _raycaster.intersectObjects(gazeTargets(), false);
         const aimHit = camHits.find(h => h.distance > camToPerson);
         if (aimHit) _aim.copy(aimHit.point);
         else _aim.copy(_raycaster.ray.direction).multiplyScalar(40).add(_raycaster.ray.origin);
@@ -351,7 +355,7 @@ export function updateGaze(dt) {
         currentGaze.origin.copy(_eye);
         currentGaze.direction.copy(_dir);
         _raycaster.set(_eye, _dir);
-        const hits = _raycaster.intersectObjects(gazeTargets(), true);
+        const hits = _raycaster.intersectObjects(gazeTargets(), false);
         hit = hits[0] || null;
     }
 
@@ -417,7 +421,8 @@ function checkProximity(person) {
             if (prompt.classList.contains('hidden')) prompt.classList.remove('hidden');
         }
         if (keys.space && ctx.inventory) {
-            ctx.inventory.addItem(nearest.userData);
+            const { proxy, ...itemData } = nearest.userData;
+            ctx.inventory.addItem(itemData);
             nearest.parent.remove(nearest);
             const i = items.indexOf(nearest);
             if (i > -1) items.splice(i, 1);

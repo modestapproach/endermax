@@ -11,7 +11,8 @@
     "shots": "node scripts/shots.mjs",
     "e2e": "node scripts/e2e-results.mjs",
     "textures": "node scripts/process-textures.mjs",
-    "flow": "node scripts/flow.mjs"
+    "flow": "node scripts/flow.mjs",
+    "bench": "node scripts/bench.mjs"
   },
   "devDependencies": {
     "playwright": "^1.63.0",
