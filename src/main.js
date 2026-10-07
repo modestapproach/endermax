@@ -125,12 +125,15 @@ async function init() {
     // interactive moment take ~30s on some machines).
     await precompile();
     T('precompiled');
+    (window.__initTimes ||= []).push(['pipelines-after-precompile', renderer._pipelines.caches.size]);
+    window.__pipeKeys = new Set(renderer._pipelines.caches.keys());
     // One warm-up frame compiles what compileAsync can't reach (shadow depth
     // and post passes) while the intro pages still cover the canvas.
     tick(0);
     renderFrame();
     setLoading(null);
     T('warm-frame');
+    (window.__initTimes ||= []).push(['pipelines-after-warm', renderer._pipelines.caches.size]);
     markReady();
     window.endermax.ready = true;
     renderer.setAnimationLoop(animate);

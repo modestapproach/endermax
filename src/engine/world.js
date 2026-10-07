@@ -7,7 +7,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { UNIT } from './layout.js';
-import { createMaterials } from './materials.js';
+import { createMaterials, paint, paintRange, PALETTE } from './materials.js';
 
 const textureUrls = import.meta.glob('../assets/textures/**/*.{webp,png,jpg,jpeg}', { eager: true, query: '?url', import: 'default' });
 // Matted shelf photos (npm run textures) take precedence over the originals.
@@ -52,13 +52,16 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
     const signLabel = (p) => p.label || layout.imageSettings.get(p.id)?.label || '';
     const signAspect = (p) => (p.span * UNIT) / ((p.band[1] - p.band[0] + 1) * UNIT);
     const signList = layout.panels.filter(p => p.kind === 'sign').map(p => ({ label: signLabel(p), aspect: signAspect(p) }));
+    const W = (l) => (window.__worldTimes ||= []).push([l, Math.round(performance.now())]);
+    W('start');
     const mats = createMaterials(heatNodes, { shelfUrls: shelfImageUrls, signList }, layout);
+    W('materials');
 
-    const fixtureGeos = [];
-    const baseGeos = [];
-    const metalGeos = [];
-    const accentGeos = [];
-    const trimGeos = [];
+    // Everything static is painted (vertex attributes) and merged into two
+    // meshes sharing ONE material: shadow casters and non-casters.
+    const casters = [];
+    const others = [];
+    const FIX = { rough: 0.62 };
     // Raycasts (gaze, camera arm) hit invisible box proxies, never the merged
     // render meshes: the store is boxes, and testing 12 triangles per fixture
     // instead of every bevel triangle took gaze from ~9ms to well under 1ms.
@@ -78,10 +81,10 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         const d = (r.gz1 - r.gz0 + 1) * UNIT;
         const cx = (r.gx0 + r.gx1) / 2 * UNIT;
         const cz = (r.gz0 + r.gz1) / 2 * UNIT;
-        fixtureGeos.push(boxAt(new RoundedBoxGeometry(w, Y_TOP_WALL - Y_KICK, d, 2, 0.035), cx, (Y_TOP_WALL + Y_KICK) / 2, cz));
+        casters.push(paint(boxAt(new RoundedBoxGeometry(w, Y_TOP_WALL - Y_KICK, d, 1, 0.035), cx, (Y_TOP_WALL + Y_KICK) / 2, cz), PALETTE.fixture, FIX));
         addProxy(w, Y_TOP_WALL, d, cx, Y_TOP_WALL / 2, cz);
-        baseGeos.push(boxAt(new THREE.BoxGeometry(w - 0.02, Y_KICK, d - 0.02), cx, Y_KICK / 2, cz));
-        trimGeos.push(boxAt(new RoundedBoxGeometry(w + 0.05, 0.07, d + 0.05, 1, 0.02), cx, Y_TOP_WALL + 0.035, cz));
+        casters.push(paint(boxAt(new THREE.BoxGeometry(w - 0.02, Y_KICK, d - 0.02), cx, Y_KICK / 2, cz), KICK, { rough: 0.5, metal: 0.2 }));
+        casters.push(paint(boxAt(new RoundedBoxGeometry(w + 0.05, 0.07, d + 0.05, 1, 0.02), cx, Y_TOP_WALL + 0.035, cz), TRIM, { rough: 0.35, metal: 0.1 }));
     }
 
     // Product walls and hanging signs: one box each, imagery on the broad faces.
@@ -98,71 +101,67 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         const sz = horizontal ? spanLen : thick;
 
         const geo = new THREE.BoxGeometry(sx, y1 - y0, sz);
-        const edgeMat = isSign ? mats.accent : mats.fixture;
-        const img = isSign ? mats.sign : mats.image;
-        // Remap the two image faces' UVs into this panel's atlas cell.
-        const rect = isSign ? mats.signRect(signLabel(p), signAspect(p)) : mats.imageRect(p.id);
-        remapFaceUVs(geo, horizontal ? [0, 1] : [4, 5], rect);
-        // BoxGeometry face order: +x, -x, +y, -y, +z, -z. Default per-face UVs
-        // already reproduce v1's mapping (back face mirrored so it reads right).
-        const faceMats = horizontal
-            ? [img, img, edgeMat, edgeMat, edgeMat, edgeMat]
-            : [edgeMat, edgeMat, edgeMat, edgeMat, img, img];
-        const mesh = new THREE.Mesh(geo, faceMats);
-        mesh.position.set(cx, (y0 + y1) / 2, cz);
-        mesh.castShadow = !isSign;
-        mesh.receiveShadow = true;
-        mesh.userData.kind = p.kind;
-        group.add(mesh);
+        paint(geo, isSign ? PALETTE.accent : PALETTE.fixture, isSign ? { rough: 0.4, metal: 0.1 } : FIX);
+        // BoxGeometry face order: +x, -x, +y, -y, +z, -z (4 vertices each).
+        // Default per-face UVs reproduce v1's mapping (back face mirrored so
+        // it reads right); remap the two image faces into the atlas.
+        const faces = horizontal ? [0, 1] : [4, 5];
+        remapFaceUVs(geo, faces, isSign ? mats.signRect(signLabel(p), signAspect(p)) : mats.imageRect(p.id));
+        for (const f of faces) paintRange(geo, f * 4, 4, isSign ? { tex: 1, rough: 0.4, metal: 0, glow: 0.12 } : { tex: 1, rough: 0.55 });
+        geo.translate(cx, (y0 + y1) / 2, cz);
+        (isSign ? others : casters).push(geo);
         addProxy(sx, isSign ? y1 - y0 : y1, sz, cx, isSign ? (y0 + y1) / 2 : y1 / 2, cz, { kind: p.kind });
 
         if (!isSign) {
-            baseGeos.push(boxAt(new THREE.BoxGeometry(sx - 0.02, Y_KICK, sz - 0.02), cx, Y_KICK / 2, cz));
+            casters.push(paint(boxAt(new THREE.BoxGeometry(sx - 0.02, Y_KICK, sz - 0.02), cx, Y_KICK / 2, cz), KICK, { rough: 0.5, metal: 0.2 }));
             // Cap that overhangs a touch, like a gondola top shelf.
-            trimGeos.push(boxAt(new RoundedBoxGeometry(sx + 0.05, 0.07, sz + 0.05, 1, 0.02), cx, Y_TOP_WALL + 0.035, cz));
+            casters.push(paint(boxAt(new RoundedBoxGeometry(sx + 0.05, 0.07, sz + 0.05, 1, 0.02), cx, Y_TOP_WALL + 0.035, cz), TRIM, { rough: 0.35, metal: 0.1 }));
         } else {
-            accentGeos.push(boxAt(new THREE.BoxGeometry(sx + 0.03, 0.05, sz + 0.03), cx, y1 + 0.025, cz));
+            others.push(paint(boxAt(new THREE.BoxGeometry(sx + 0.03, 0.05, sz + 0.03), cx, y1 + 0.025, cz), PALETTE.accent, { rough: 0.4, metal: 0.1 }));
         }
     }
 
-    // Hangers: slim rods from the sign up toward the ceiling line.
+    // Hangers: slim rods from the sign up to the ceiling.
     for (const h of layout.hangers) {
         const y0 = 13 * UNIT;
-        const y1 = 21.5 * UNIT; // up to the ceiling
-        metalGeos.push(boxAt(new THREE.CylinderGeometry(0.018, 0.018, y1 - y0, 8), h.gx * UNIT, (y0 + y1) / 2, h.gz * UNIT));
+        const y1 = SHELL.ceiling;
+        others.push(paint(boxAt(new THREE.CylinderGeometry(0.018, 0.018, y1 - y0, 8), h.gx * UNIT, (y0 + y1) / 2, h.gz * UNIT), METAL, { rough: 0.3, metal: 0.9 }));
         addProxy(0.08, y1 - y0, 0.08, h.gx * UNIT, (y0 + y1) / 2, h.gz * UNIT);
     }
 
     // Open shelving units ('e'): boards at each level plus uprights.
     for (const s of layout.shelves) {
         for (const lvl of layout.bands.shelfLevels) {
-            fixtureGeos.push(boxAt(new THREE.BoxGeometry(UNIT, 0.05, UNIT), s.gx * UNIT, lvl * UNIT, s.gz * UNIT));
+            casters.push(paint(boxAt(new THREE.BoxGeometry(UNIT, 0.05, UNIT), s.gx * UNIT, lvl * UNIT, s.gz * UNIT), PALETTE.fixture, FIX));
         }
-        metalGeos.push(boxAt(new THREE.BoxGeometry(0.04, Y_TOP_WALL, 0.04), s.gx * UNIT, Y_TOP_WALL / 2, s.gz * UNIT));
+        casters.push(paint(boxAt(new THREE.BoxGeometry(0.04, Y_TOP_WALL, 0.04), s.gx * UNIT, Y_TOP_WALL / 2, s.gz * UNIT), METAL, { rough: 0.3, metal: 0.9 }));
         addProxy(UNIT, Y_TOP_WALL, UNIT, s.gx * UNIT, Y_TOP_WALL / 2, s.gz * UNIT);
     }
     for (const t of layout.talls) {
-        fixtureGeos.push(boxAt(new RoundedBoxGeometry(UNIT, 4.5 * UNIT, UNIT, 2, 0.03), t.gx * UNIT, 2.25 * UNIT, t.gz * UNIT));
+        casters.push(paint(boxAt(new RoundedBoxGeometry(UNIT, 4.5 * UNIT, UNIT, 2, 0.03), t.gx * UNIT, 2.25 * UNIT, t.gz * UNIT), PALETTE.fixture, FIX));
         addProxy(UNIT, 4.5 * UNIT, UNIT, t.gx * UNIT, 2.25 * UNIT, t.gz * UNIT);
     }
 
-    const addMerged = (geos, material, name, castShadow = true) => {
+    // Shell: ceiling with LED strips and perimeter walls. All single-sided and
+    // facing inward, so overview cameras outside/above see straight in.
+    others.push(...buildShell());
+    W('geometry');
+
+    const addMerged = (geos, name, castShadow) => {
         if (!geos.length) return null;
         // Mixed index/non-index sources can't merge; normalize to non-indexed.
         const merged = mergeGeometries(geos.map(g => (g.index ? g.toNonIndexed() : g)), false);
         geos.forEach(g => g.dispose());
-        const mesh = new THREE.Mesh(merged, material);
+        const mesh = new THREE.Mesh(merged, mats.store);
         mesh.name = name;
         mesh.castShadow = castShadow;
         mesh.receiveShadow = true;
         group.add(mesh);
         return mesh;
     };
-    addMerged(fixtureGeos, mats.fixture, 'fixtures');
-    addMerged(baseGeos, mats.base, 'kickplates');
-    addMerged(trimGeos, mats.trim, 'top-trim');
-    addMerged(accentGeos, mats.accent, 'sign-trim', false);
-    addMerged(metalGeos, mats.metal, 'hardware', false);
+    addMerged(casters, 'store-casters', true);
+    addMerged(others, 'store-shell-signs', false);
+    W('merged');
 
     // Floor
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(120 * UNIT, 120 * UNIT), mats.floor);
@@ -171,10 +170,6 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
     floor.userData = { type: 'ground' };
     floor.name = 'floor';
     group.add(floor);
-
-    // Shell: ceiling with light strips and perimeter walls. All single-sided
-    // and facing inward, so overview cameras outside/above see straight in.
-    group.add(buildShell(mats));
 
     // Pickup items
     const items = [];
@@ -208,36 +203,29 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
 }
 
 export const SHELL = { half: 30, ceiling: 21.5 * UNIT };
+const KICK = '#4a4a55', TRIM = '#dedee3', METAL = '#9aa0a6';
 
-function buildShell(mats) {
-    const shell = new THREE.Group();
-    shell.name = 'shell';
+function buildShell() {
     const { half, ceiling } = SHELL;
+    const out = [];
 
     // Dark open ceiling: makes the LED runs pop and frames every shot.
-    const ceilingMat = new THREE.MeshStandardNodeMaterial({ color: '#24232b', roughness: 0.95, side: THREE.FrontSide });
-    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2), ceilingMat);
-    ceil.rotation.x = Math.PI / 2; // faces down
-    ceil.position.y = ceiling;
-    shell.add(ceil);
+    const ceil = new THREE.PlaneGeometry(half * 2, half * 2);
+    ceil.rotateX(Math.PI / 2); // faces down
+    ceil.translate(0, ceiling, 0);
+    out.push(paint(ceil, '#3a3942', { rough: 0.95 }));
 
-    // Linear LED fixtures: emissive so bloom gives them a soft halo.
-    const stripMat = new THREE.MeshStandardNodeMaterial({ color: '#ffffff', emissive: '#fff8ee', emissiveIntensity: 4, roughness: 1 });
-    const strips = [];
+    // Linear LED fixtures: self-lit white.
     for (let x = -24; x <= 24; x += 6) {
         for (let z = -24; z <= 24; z += 12) {
             const g = new THREE.PlaneGeometry(0.28, 8);
             g.rotateX(Math.PI / 2);
             g.translate(x, ceiling - 0.02, z);
-            strips.push(g);
+            out.push(paint(g, '#ffffff', { rough: 1, glow: 4 }));
         }
     }
-    shell.add(new THREE.Mesh(mergeGeometries(strips), stripMat));
 
     // Walls: warm gray with a dark baseboard and a thin brand band.
-    const wallMat = new THREE.MeshStandardNodeMaterial({ color: '#e7e3dc', roughness: 0.85 });
-    const baseMat = new THREE.MeshStandardNodeMaterial({ color: '#2f2f3a', roughness: 0.6 });
-    const bandMat = new THREE.MeshStandardNodeMaterial({ color: '#4f46e5', roughness: 0.5, emissive: '#4f46e5', emissiveIntensity: 0.15 });
     const sides = [
         { pos: [0, 0, -half], rotY: 0 },
         { pos: [0, 0, half], rotY: Math.PI },
@@ -245,21 +233,18 @@ function buildShell(mats) {
         { pos: [half, 0, 0], rotY: -Math.PI / 2 }
     ];
     for (const s of sides) {
-        const wall = new THREE.Group();
-        wall.position.set(...s.pos);
-        wall.rotation.y = s.rotY;
-        const plane = (h, y, mat, inset = 0) => {
-            const m = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, h), mat);
-            m.position.set(0, y, inset);
-            m.receiveShadow = true;
-            wall.add(m);
+        const plane = (h, y, hex, opts, inset = 0) => {
+            const g = new THREE.PlaneGeometry(half * 2, h);
+            g.translate(0, y, inset);
+            g.rotateY(s.rotY);
+            g.translate(...s.pos);
+            out.push(paint(g, hex, opts));
         };
-        plane(ceiling, ceiling / 2, wallMat);
-        plane(0.3, 0.15, baseMat, 0.01);
-        plane(0.12, 7.2, bandMat, 0.01);
-        shell.add(wall);
+        plane(ceiling, ceiling / 2, '#e7e3dc', { rough: 0.85 });
+        plane(0.3, 0.15, '#2f2f3a', { rough: 0.6 }, 0.01);
+        plane(0.12, 7.2, '#4f46e5', { rough: 0.5, glow: 0.15 }, 0.01);
     }
-    return shell;
+    return out;
 }
 
 const PROXY_MATERIAL = new THREE.MeshBasicNodeMaterial({ visible: false });
@@ -308,7 +293,11 @@ function loadPickupItems(layout, parent, items, onLoaded) {
             box.setFromObject(model);
             model.position.y -= box.min.y;
             model.traverse(n => {
-                if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; n.userData = userData; }
+                if (!n.isMesh) return;
+                n.castShadow = true; n.receiveShadow = true; n.userData = userData;
+                // One simple material type for all item models (fewer shaders).
+                const old = n.material;
+                n.material = new THREE.MeshStandardNodeMaterial({ map: old.map || null, color: old.color || '#ffffff', roughness: 0.6, metalness: 0 });
             });
             anchor.add(model);
             onLoaded?.();

@@ -13,10 +13,13 @@ const q = new URLSearchParams(location.search);
 // Graphics presets. Measured at 2880x1800 (M-series, WebGPU): GTAO alone was
 // ~10ms of a 13.7ms GPU frame, so only "high" pays for it; everything else
 // uses baked contact shading. fps is the render cap (input-idle drops lower).
+// Every extra pass/feature is extra shader pipelines, and on some GPUs (Intel
+// Macs with AMD Radeon) each pipeline costs ~0.5-1s to compile at load. So
+// image-based lighting, bloom and AO are "high" only.
 export const PRESETS = {
-    battery:  { dpr: 1,   msaa: false, ao: false, bloom: false, fps: 30 },
-    balanced: { dpr: 1.5, msaa: true,  ao: false, bloom: true,  fps: 60 },
-    high:     { dpr: 2,   msaa: true,  ao: true,  bloom: true,  fps: 60 }
+    battery:  { dpr: 1,   msaa: false, ao: false, bloom: false, ibl: false, soft: false, fps: 30 },
+    balanced: { dpr: 1.5, msaa: true,  ao: false, bloom: false, ibl: false, soft: false, fps: 60 },
+    high:     { dpr: 2,   msaa: true,  ao: true,  bloom: true,  ibl: true,  soft: true,  fps: 60 }
 };
 function storedPreset() {
     try { return localStorage.getItem('endermax.quality'); } catch { return null; }
@@ -29,7 +32,9 @@ export const QUALITY_FLAGS = {
     msaa: q.has('msaa') ? q.get('msaa') !== '0' : preset.msaa,
     ao: q.has('ao') ? q.get('ao') !== '0' : preset.ao,
     bloom: q.has('bloom') ? q.get('bloom') !== '0' : preset.bloom,
-    fps: q.has('fps') ? parseFloat(q.get('fps')) : preset.fps
+    fps: q.has('fps') ? parseFloat(q.get('fps')) : preset.fps,
+    ibl: q.has('ibl') ? q.get('ibl') !== '0' : preset.ibl,
+    soft: preset.soft
 };
 export function setQualityPreset(name) {
     try { localStorage.setItem('endermax.quality', name); } catch { /* private mode */ }
@@ -47,7 +52,7 @@ export async function createRenderer({ canvas, width = window.innerWidth, height
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 0.95;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = QUALITY_FLAGS.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     await renderer.init();
     return renderer;
 }
@@ -60,13 +65,17 @@ export function createLighting(scene, renderer) {
     scene.background = new THREE.Color(PALETTE.backdrop);
     scene.fog = new THREE.Fog(PALETTE.backdrop, 40, 95);
 
-    // Soft studio IBL for diffuse fill and believable reflections.
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    const envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
-    scene.environment = envRT.texture;
-    scene.environmentIntensity = 0.5;
+    // Soft studio IBL for diffuse fill and reflections ("high" only: PMREM
+    // generation plus environment sampling in every shader is costly to compile).
+    if (QUALITY_FLAGS.ibl) {
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        const envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
+        scene.environment = envRT.texture;
+        scene.environmentIntensity = 0.5;
+    }
 
-    const hemi = new THREE.HemisphereLight('#ffffff', '#8a8478', 0.4);
+    // Without IBL the hemisphere carries the fill light.
+    const hemi = new THREE.HemisphereLight('#ffffff', '#8a8478', QUALITY_FLAGS.ibl ? 0.4 : 1.35);
     scene.add(hemi);
 
     // Key light: high, slightly warm, casting the whole store's shadows.
