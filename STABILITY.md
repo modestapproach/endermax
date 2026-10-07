@@ -16,9 +16,11 @@
 
 ## Changed behavior in v2
 
-- Gaze in third person now follows the cursor exactly: the camera ray picks the
-  aim point and the gaze ray is cast from the shopper's eyes toward it. v1
-  approximated a direction from the cursor's screen offset.
+- Camera, gaze and movement match v1 exactly: the 90° camera 4.5 behind and
+  1.5 above the head, the cursor-offset gaze model, instant movement, and drag
+  to turn. `npm run parity` checks gaze hits against the v1 build on :5173.
+  The only deliberate difference: the head now turns *toward* the cursor (v1's
+  head rotation was mirrored, which was invisible on its featureless sphere).
 - The shopper collides with fixtures. v1 allowed walking through shelves.
 - Bird's-eye snapshots are 2D plan maps, not top-down renders.
 - Heat rates, AoE radius and grid keys are unchanged, so recorded data stays

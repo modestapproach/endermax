@@ -325,7 +325,7 @@ const perf = { tick: 0, render: 0, gpu: 0, frames: 0 };
 const ema = (prev, v) => prev ? prev * 0.95 + v * 0.05 : v;
 
 // Frame pacing: cap at the preset's fps (120Hz displays would otherwise do
-// double the work), and drop to ~20fps after a few seconds without input.
+// double the work), and drop to 30fps after 10s without input.
 let lastInput = performance.now();
 let lastFrame = 0;
 for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel']) {
@@ -334,8 +334,10 @@ for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel']) {
 
 function animate(time = performance.now()) {
     if (capturing) return; // don't present a different frame mid-capture
-    const idle = time - lastInput > 3000 && !isTestActive;
-    const cap = idle ? Math.min(QUALITY_FLAGS.fps || 60, 20) : QUALITY_FLAGS.fps;
+    // Idle = no input for 10s. Staring at a shelf without moving the mouse is
+    // a normal way to use the sim, so the idle rate stays smooth (30fps).
+    const idle = time - lastInput > 10000 && !isTestActive;
+    const cap = idle ? Math.min(QUALITY_FLAGS.fps || 60, 30) : QUALITY_FLAGS.fps;
     if (cap && time - lastFrame < 1000 / cap - 1) return;
     lastFrame = time;
     const dt = Math.min(clock.getDelta(), 0.1);

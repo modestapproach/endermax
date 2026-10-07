@@ -23,7 +23,8 @@ export function getCurrentGaze() {
 export function setGazeEnabled(enabled) { gazeEnabled = enabled; }
 export function getIsDragging() { return isDragging; }
 export function getIsFirstPerson() { return isFirstPerson; }
-export const FOV = { third: 54, first: 70 };
+// v1 used one 90° camera for both modes; the wide lens is part of the feel.
+export const FOV = { third: 90, first: 90 };
 export function getDesiredFov() { return isFirstPerson ? FOV.first : FOV.third; }
 
 // Dev/automation hooks (window.endermax) — direct pose control.
@@ -55,11 +56,10 @@ export function setupControls(context) {
     ctx = context;
     blocked = new Set();
     for (const c of ctx.layout.cells.values()) if (c.gy <= 10) blocked.add(`${c.gx},${c.gz}`);
-    // Pointer events cover mouse, pen, and touch.
-    document.addEventListener('pointerdown', onPointerDown, false);
-    document.addEventListener('pointermove', onPointerMove, false);
-    document.addEventListener('pointerup', () => { isDragging = false; }, false);
-    document.addEventListener('pointercancel', () => { isDragging = false; }, false);
+    // v1 input model: a drag can start anywhere on the page (overlays included).
+    document.addEventListener('mousedown', onPointerDown, false);
+    document.addEventListener('mousemove', onPointerMove, false);
+    document.addEventListener('mouseup', () => { isDragging = false; }, false);
     document.addEventListener('keydown', (e) => setKey(e, true), false);
     document.addEventListener('keyup', (e) => setKey(e, false), false);
     window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -80,8 +80,9 @@ function setKey(event, down) {
 }
 
 function onPointerDown(event) {
-    // Only drags that start on the 3D canvas rotate the view.
-    if (event.target && event.target.tagName !== 'CANVAS') return;
+    // As in v1 any mousedown starts a view drag — except on form controls,
+    // where a drag would fight the control.
+    if (event.target?.closest?.('button, input, select, textarea, a, label')) return;
     isDragging = true;
     previousMouseX = event.clientX;
     previousMouseY = event.clientY;
@@ -160,8 +161,6 @@ export function attachUIHandlers(heat) {
 }
 
 // --- Movement ----------------------------------------------------------------
-const _velocity = new THREE.Vector3();
-const _wish = new THREE.Vector3();
 const WORLD_BOUND = 29;
 let currentSpeed = 0;
 
@@ -169,37 +168,35 @@ export function updateMovement(dt) {
     if (!ctx) return;
     const person = ctx.character.person;
 
-    const fx = -Math.sin(yaw), fz = -Math.cos(yaw);   // forward
-    const rx = Math.cos(yaw), rz = -Math.sin(yaw);    // right
-    _wish.set(0, 0, 0);
-    if (keys.w || keys.arrowUp) _wish.x += fx, _wish.z += fz;
-    if (keys.s || keys.arrowDown) _wish.x -= fx, _wish.z -= fz;
-    if (keys.d) _wish.x += rx, _wish.z += rz;
-    if (keys.a) _wish.x -= rx, _wish.z -= rz;
-    if (_wish.lengthSq() > 0) _wish.normalize().multiplyScalar(moveSpeed * 60);
+    // v1 movement: instant (no acceleration), rates tuned at 60fps and
+    // dt-scaled. Forward/right steps add independently, as in v1.
+    const timeScale = dt * 60;
+    const step = moveSpeed * timeScale;
+    const fx = Math.sin(yaw), fz = Math.cos(yaw);   // v1 "_forward" (points behind)
+    const rx = Math.cos(yaw), rz = -Math.sin(yaw);  // right
+    let mx = 0, mz = 0;
+    if (keys.w || keys.arrowUp) { mx -= fx * step; mz -= fz * step; }
+    if (keys.s || keys.arrowDown) { mx += fx * step; mz += fz * step; }
+    if (keys.a) { mx -= rx * step; mz -= rz * step; }
+    if (keys.d) { mx += rx * step; mz += rz * step; }
 
-    // Ease toward the wished velocity: quick start, soft stop.
-    const accel = _wish.lengthSq() > 0 ? 14 : 10;
-    _velocity.lerp(_wish, 1 - Math.exp(-accel * dt));
-    // Axis-separated moves so the shopper slides along shelves instead of
-    // passing through them (sub-stepped so fast frames can't tunnel).
-    const steps = Math.max(1, Math.ceil(_velocity.length() * dt / 0.2));
-    for (let i = 0; i < steps; i++) {
-        const nx = person.position.x + _velocity.x * dt / steps;
-        if (!collides(nx, person.position.z)) person.position.x = nx; else _velocity.x = 0;
-        const nz = person.position.z + _velocity.z * dt / steps;
-        if (!collides(person.position.x, nz)) person.position.z = nz; else _velocity.z = 0;
+    const rotationSpeed = 0.05 * timeScale;
+    if (keys.arrowLeft) yaw += rotationSpeed;
+    if (keys.arrowRight) yaw -= rotationSpeed;
+
+    // Collision (v2): axis-separated so the shopper slides along shelves.
+    const sub = Math.max(1, Math.ceil(Math.hypot(mx, mz) / 0.2));
+    for (let i = 0; i < sub; i++) {
+        const nx = person.position.x + mx / sub;
+        if (!collides(nx, person.position.z)) person.position.x = nx;
+        const nz = person.position.z + mz / sub;
+        if (!collides(person.position.x, nz)) person.position.z = nz;
     }
     person.position.x = Math.max(-WORLD_BOUND, Math.min(WORLD_BOUND, person.position.x));
     person.position.z = Math.max(-WORLD_BOUND, Math.min(WORLD_BOUND, person.position.z));
-    currentSpeed = _velocity.length();
+    currentSpeed = dt > 0 ? Math.hypot(mx, mz) / dt : 0;
 
-    const turn = 3 * dt;
-    if (keys.arrowLeft) yaw += turn;
-    if (keys.arrowRight) yaw -= turn;
-    person.rotation.y = yaw;
-
-    updateCamera(dt);
+    updateCamera();
     checkProximity(person);
 }
 
@@ -217,72 +214,44 @@ function collides(x, z) {
     return false;
 }
 
-// --- Camera rig ----------------------------------------------------------------
-let snapCamera = true;
-const _camTarget = new THREE.Vector3();
-const _camPos = new THREE.Vector3();
+// --- Camera rig (v1) ---------------------------------------------------------------
+let snapCamera = true; // kept for API compatibility (v1 camera is never smoothed)
 const _look = new THREE.Vector3();
-const _smoothLook = new THREE.Vector3();
-const _armOrigin = new THREE.Vector3();
-const _armDir = new THREE.Vector3();
-const _armRay = new THREE.Raycaster();
-let armCurrent = 6;
 
-function updateCamera(dt) {
+function updateCamera() {
     const { camera } = ctx;
     const person = ctx.character.person;
     if (isFirstPerson) {
-        camera.position.set(person.position.x, person.position.y + EYE_HEIGHT, person.position.z);
+        // v1: camera at eye level looking along the body heading; drag pitch
+        // raises/lowers the look target directly.
+        const eyeHeight = EYE_HEIGHT;
+        camera.position.set(person.position.x, person.position.y + eyeHeight, person.position.z);
+        const flipped = yaw + Math.PI;
         _look.set(
-            camera.position.x - Math.sin(yaw) * Math.cos(pitch),
-            camera.position.y + Math.sin(pitch),
-            camera.position.z - Math.cos(yaw) * Math.cos(pitch)
+            person.position.x + Math.sin(flipped),
+            person.position.y + eyeHeight + pitch,
+            person.position.z + Math.cos(flipped)
         );
         camera.lookAt(_look);
-        ctx.character.setFade(1);
-        ctx.character.person.visible = false;
-        snapCamera = true;
+        person.rotation.y = yaw;
+        person.visible = false;
         return;
     }
-    ctx.character.person.visible = true;
+    person.visible = true;
+    ctx.character.setFade(1);
 
-    // Over-the-shoulder: behind, a little above, offset right so the shopper
-    // sits left of center and the view ahead stays open. Pitch tilts the orbit.
-    const radius = 5.4;
-    const side = 0.95;
-    const elev = THREE.MathUtils.clamp(0.3 + pitch * 0.6, 0.02, 1.1);
-    const rx = Math.cos(yaw), rz = -Math.sin(yaw); // camera right
-    _camPos.set(
-        person.position.x + Math.sin(yaw) * Math.cos(elev) * radius + rx * side,
-        person.position.y + EYE_HEIGHT + 0.3 + Math.sin(elev) * radius,
-        person.position.z + Math.cos(yaw) * Math.cos(elev) * radius + rz * side
+    // v1 third person: 4.5 behind, 1.5 above the head, looking at the head;
+    // drag pitch moves the camera up/down.
+    const radius = 4.5;
+    const heightOffset = 1.5;
+    const targetY = person.position.y + EYE_HEIGHT;
+    camera.position.set(
+        person.position.x + radius * Math.sin(yaw),
+        targetY + heightOffset + pitch * 2,
+        person.position.z + radius * Math.cos(yaw)
     );
-    _camTarget.set(
-        person.position.x - Math.sin(yaw) * 4 + rx * side * 0.6,
-        person.position.y + EYE_HEIGHT - 0.35,
-        person.position.z - Math.cos(yaw) * 4 + rz * side * 0.6
-    );
-
-    // Spring arm: if a fixture sits between the head and the ideal camera
-    // spot, pull the camera in front of it (snaps in, eases back out).
-    _armOrigin.set(person.position.x, person.position.y + EYE_HEIGHT, person.position.z);
-    _armDir.subVectors(_camPos, _armOrigin);
-    const armLen = _armDir.length();
-    _armDir.divideScalar(armLen);
-    _armRay.set(_armOrigin, _armDir);
-    _armRay.far = armLen;
-    const armHit = _armRay.intersectObjects(ctx.world.raycastTargets, false)[0];
-    const wanted = armHit ? Math.max(armHit.distance - 0.35, 0.8) : armLen;
-    armCurrent = wanted < armCurrent || snapCamera ? wanted : armCurrent + (wanted - armCurrent) * (1 - Math.exp(-4 * dt));
-    _camPos.copy(_armOrigin).addScaledVector(_armDir, armCurrent);
-
-    // Close arm -> ghost the figure so it doesn't wall off the view.
-    ctx.character.setFade(THREE.MathUtils.clamp((armCurrent - 1.6) / 1.8, 0.22, 1));
-
-    const k = snapCamera ? 1 : 1 - Math.exp(-10 * dt);
-    camera.position.lerp(_camPos, k);
-    _smoothLook.lerp(_camTarget, k);
-    camera.lookAt(_smoothLook);
+    camera.lookAt(person.position.x, targetY, person.position.z);
+    person.rotation.y = yaw;
     snapCamera = false;
 }
 
@@ -290,10 +259,8 @@ function updateCamera(dt) {
 const _raycaster = new THREE.Raycaster();
 const _pointer = new THREE.Vector2();
 const _eye = new THREE.Vector3();
-const _aim = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _normal = new THREE.Vector3();
-const _local = new THREE.Vector3();
 let _targets = null;
 let _targetsItemCount = -1;
 
@@ -342,16 +309,10 @@ export function updateGaze(dt) {
         currentGaze.direction.copy(_raycaster.ray.direction);
         character.setGaze(false);
     } else {
-        // Aim where the cursor points, ignoring anything between the camera
-        // and the shopper (it's cut away on screen), then cast from the eyes.
-        const camToPerson = camera.position.distanceTo(person.position) - 0.5;
-        const camHits = _raycaster.intersectObjects(gazeTargets(), false);
-        const aimHit = camHits.find(h => h.distance > camToPerson);
-        if (aimHit) _aim.copy(aimHit.point);
-        else _aim.copy(_raycaster.ray.direction).multiplyScalar(40).add(_raycaster.ray.origin);
-
-        _eye.set(0, EYE_HEIGHT, -0.32).applyMatrix4(person.matrixWorld);
-        _dir.subVectors(_aim, _eye).normalize();
+        // v1 gaze: the cursor's screen offset becomes a head-relative look
+        // direction (about ±45° across, ±37° up/down), cast from the face.
+        _dir.set(mouseX * 8, mouseY * 6, -8).normalize().applyAxisAngle(THREE.Object3D.DEFAULT_UP, person.rotation.y);
+        _eye.set(0, EYE_HEIGHT, 0.35).applyMatrix4(person.matrixWorld); // v1's gaze origin
         currentGaze.origin.copy(_eye);
         currentGaze.direction.copy(_dir);
         _raycaster.set(_eye, _dir);
@@ -362,11 +323,8 @@ export function updateGaze(dt) {
     if (hit && hit.face) _normal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
     if (!isFirstPerson) character.setGaze(true, currentGaze.origin, currentGaze.direction, hit, hit && hit.face ? _normal : null);
 
-    // Head follows the gaze relative to the body.
-    _local.copy(currentGaze.direction).applyAxisAngle(THREE.Object3D.DEFAULT_UP, -yaw);
-    const headYaw = THREE.MathUtils.clamp(Math.atan2(-_local.x, -_local.z), -1.1, 1.1);
-    const headPitch = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(_local.y, -1, 1)), -0.6, 0.6);
-    character.animate(dt, currentSpeed, headYaw, headPitch);
+    // v1 head tracking: straight from the cursor offset.
+    character.animate(dt, currentSpeed, -mouseX * 1.0, mouseY * 0.8);
 
     const isGround = hit && hit.object.userData.type === 'ground';
     const isItem = hit && hit.object.userData.type === 'item';

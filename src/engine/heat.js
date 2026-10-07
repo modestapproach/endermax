@@ -45,6 +45,7 @@ export class HeatField {
         this.dirty = false;
         this.maxHeat = 0;
         this._hot = new Set(); // indices with heat > 0, so decay never scans the full volume
+        this._box = new Int32Array(6); // dirty region (ix0,iy0,iz0,ix1,iy1,iz1)
     }
 
     index(gx, gy, gz) {
@@ -62,9 +63,20 @@ export class HeatField {
     _set(i, v) {
         v = Math.min(Math.max(v, 0), 1);
         this.values[i] = v;
-        this.bytes[i] = Math.round(v * 255);
         if (v > 0) this._hot.add(i); else this._hot.delete(i);
         if (v > this.maxHeat) this.maxHeat = v;
+        this._markDirty(i);
+    }
+
+    _markDirty(i) {
+        const { x, y } = this.dims;
+        const ix = i % x, iy = Math.floor(i / x) % y, iz = Math.floor(i / (x * y));
+        const b = this._box;
+        if (!this.dirty) { b[0] = b[3] = ix; b[1] = b[4] = iy; b[2] = b[5] = iz; }
+        else {
+            b[0] = Math.min(b[0], ix); b[1] = Math.min(b[1], iy); b[2] = Math.min(b[2], iz);
+            b[3] = Math.max(b[3], ix); b[4] = Math.max(b[4], iy); b[5] = Math.max(b[5], iz);
+        }
         this.dirty = true;
     }
 
@@ -90,9 +102,32 @@ export class HeatField {
         }
     }
 
-    // Called once per frame before rendering.
+    // Called once per frame before rendering. The displayed value of a cell is
+    // the max of its own heat and 0.7x its 26 neighbours: a gazed-at cell then
+    // reads as a full soft patch (like a v1 block) instead of a tiny peak
+    // under trilinear filtering. Only the changed region is recomputed.
     flush() {
         if (!this.dirty) return;
+        const { x: nx, y: ny, z: nz } = this.dims;
+        const b = this._box, V = this.values, B = this.bytes;
+        const x0 = Math.max(b[0] - 1, 0), y0 = Math.max(b[1] - 1, 0), z0 = Math.max(b[2] - 1, 0);
+        const x1 = Math.min(b[3] + 1, nx - 1), y1 = Math.min(b[4] + 1, ny - 1), z1 = Math.min(b[5] + 1, nz - 1);
+        for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+            const i = x + nx * (y + ny * z);
+            let v = V[i];
+            for (let dz = -1; dz <= 1; dz++) {
+                const zz = z + dz; if (zz < 0 || zz >= nz) continue;
+                for (let dy = -1; dy <= 1; dy++) {
+                    const yy = y + dy; if (yy < 0 || yy >= ny) continue;
+                    for (let dx = -1; dx <= 1; dx++) {
+                        const xx = x + dx; if (xx < 0 || xx >= nx || (dx | dy | dz) === 0) continue;
+                        const n = V[xx + nx * (yy + ny * zz)] * 0.7;
+                        if (n > v) v = n;
+                    }
+                }
+            }
+            B[i] = Math.round(v * 255);
+        }
         this.texture.needsUpdate = true;
         this.dirty = false;
     }
@@ -102,7 +137,8 @@ export class HeatField {
         this.bytes.fill(0);
         this._hot.clear();
         this.maxHeat = 0;
-        this.dirty = true;
+        this.texture.needsUpdate = true;
+        this.dirty = false;
     }
 
     // v1-compatible serialization: { "gx,gy,gz": heat } for heated cells.
@@ -158,7 +194,8 @@ export function createHeatNodes(field) {
     const origin = vec3(field.origin.gx, field.origin.gy, field.origin.gz);
     const strength = uniform(1); // 0 hides heat (e.g. a "clean" capture)
 
-    // Sample half a cell inside the surface so faces read their own cell.
+    // Sample half a cell inside the surface so faces read their own cell
+    // (the field is pre-dilated on the CPU, see HeatField.flush).
     const heat = Fn(() => {
         const p = positionWorld.sub(normalWorld.mul(UNIT * 0.49)).div(UNIT);
         const uvw = p.sub(origin).add(0.5).div(dims);
@@ -166,23 +203,23 @@ export function createHeatNodes(field) {
     })();
 
     const heatColor = texture(ramp, vec2(heat, 0.5)).rgb;
-    // Fill: nothing below 0.06, capped at 0.6 so packaging stays readable.
-    const heatMix = smoothstep(float(0.06), float(0.45), heat).mul(0.6);
+    // v1-strength fill: light heat already shows the blue tint; hot reads solid.
+    const heatMix = smoothstep(float(0.0), float(0.22), heat).mul(0.88);
     // Contours at 0.4 / 0.6 / 0.8, drawn in the ramp colour of their level.
     const bands = heat.mul(5);
     const w = fwidth(bands);
     const contour = float(1).sub(smoothstep(float(0), w.mul(1.25), abs(fract(bands.add(0.5)).sub(0.5))))
-        .mul(smoothstep(float(0.34), float(0.4), heat)).mul(0.75);
+        .mul(smoothstep(float(0.34), float(0.4), heat)).mul(0.6);
     const tint = (base) => {
-        // Desaturate what's under heat so the ramp has something to sit on.
+        // Light desaturation under strong heat keeps the ramp readable on packaging.
         const grey = vec3(luminance(base));
-        const under = mix(base, grey, heatMix.mul(1.2).min(0.6));
+        const under = mix(base, grey, smoothstep(float(0.3), float(0.8), heat).mul(0.5));
         return mix(mix(under, heatColor, heatMix), heatColor.mul(0.8), contour);
     };
-    const fixtureGate = smoothstep(float(0.28), float(0.4), heat);
-    const tintFixture = (base) => mix(base, mix(mix(base, heatColor, heatMix), heatColor.mul(0.8), contour), fixtureGate);
-    // Only genuinely hot spots glow (bloom), so low heat never haloes.
-    const glow = heatColor.mul(smoothstep(float(0.6), float(1.0), heat).mul(0.35));
+    // Plain fixtures get heat too (v1 coloured every block), same response.
+    const tintFixture = tint;
+    // Hot spots glow so bloom picks them up.
+    const glow = heatColor.mul(smoothstep(float(0.55), float(1.0), heat).mul(0.4));
 
     return { heat, heatColor, heatMix, tint, tintFixture, glow, strength, ramp };
 }
