@@ -19,7 +19,7 @@ page.on('console', m => { if (m.type() === 'error') errors.push(m.text().split('
 page.on('pageerror', e => errors.push('pageerror: ' + e.message));
 
 await page.goto(`${base}/?skip`);
-await page.waitForFunction(() => window.endermax, null, { timeout: 30000 });
+await page.waitForFunction(() => window.endermax?.ready, null, { timeout: 60000 });
 const sessionId = await page.evaluate((s) => window.endermax.simulateSession({ seconds: s }), seconds);
 
 await page.goto(`${base}/results.html`);

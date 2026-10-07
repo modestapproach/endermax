@@ -13,6 +13,7 @@ const browser = await chromium.launch({ headless: true, args: ['--enable-unsafe-
 async function probe(url, setup, tag) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await page.goto(url);
+    if (url.includes(':5174')) await page.waitForFunction(() => window.endermax?.ready, null, { timeout: 60000 });
     await page.waitForTimeout(2500);
     await page.evaluate(setup);
     if (fp) await page.evaluate(() => document.getElementById('cameraToggle')?.click());

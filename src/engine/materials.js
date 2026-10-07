@@ -74,7 +74,7 @@ function bakeFloorAO(layout) {
     return { tex, nx, nz, o };
 }
 
-export function createMaterials(heatNodes, textures, layout) {
+export function createMaterials(heatNodes, { shelfUrls, signList }, layout) {
     const { tint, tintFixture, glow } = heatNodes;
 
     const fixture = new THREE.MeshStandardNodeMaterial({ roughness: 0.62, metalness: 0 });
@@ -105,33 +105,20 @@ export function createMaterials(heatNodes, textures, layout) {
     base.emissiveNode = glow;
     base.maskNode = cutoutMask;
 
-    // Product imagery: one material per texture id, created lazily.
-    const imageMaterials = new Map();
-    const image = (id) => {
-        if (imageMaterials.has(id)) return imageMaterials.get(id);
-        const tex = textures.get(id);
-        const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.55, metalness: 0 });
-        const albedo = tex ? texture(tex, uv()).rgb : color(PALETTE.fixture);
-        m.colorNode = withRim(tint(albedo));
-        m.emissiveNode = glow;
-        m.maskNode = cutoutMask;
-        imageMaterials.set(id, m);
-        return m;
-    };
+    // Product imagery and signs each use ONE material over a texture atlas.
+    // Separate materials per image compiled a separate shader each (WebGPU
+    // doesn't share them), which dominated load time on cold shader caches.
+    const shelves = createShelfAtlas(shelfUrls);
+    const image = new THREE.MeshStandardNodeMaterial({ roughness: 0.55, metalness: 0 });
+    image.colorNode = withRim(tint(texture(shelves.texture, uv()).rgb));
+    image.emissiveNode = glow;
+    image.maskNode = cutoutMask;
 
-    // Hanging category signs: one designed template, drawn to canvas.
-    const signMaterials = new Map();
-    const sign = (label, aspect) => {
-        const key = `${label}|${aspect.toFixed(2)}`;
-        if (signMaterials.has(key)) return signMaterials.get(key);
-        const tex = signTexture(label || '', aspect);
-        const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.4, metalness: 0 });
-        m.colorNode = withRim(tint(texture(tex, uv()).rgb));
-        m.emissiveNode = glow.add(texture(tex, uv()).rgb.mul(0.12)); // faint self-lit face
-        m.maskNode = cutoutMask;
-        signMaterials.set(key, m);
-        return m;
-    };
+    const signs = createSignAtlas(signList);
+    const sign = new THREE.MeshStandardNodeMaterial({ roughness: 0.4, metalness: 0 });
+    sign.colorNode = withRim(tint(texture(signs.texture, uv()).rgb));
+    sign.emissiveNode = glow.add(texture(signs.texture, uv()).rgb.mul(0.12)); // faint self-lit face
+    sign.maskNode = cutoutMask;
 
     // Polished concrete with a faint 2m tile grid.
     const floor = new THREE.MeshStandardNodeMaterial({ metalness: 0 });
@@ -151,7 +138,7 @@ export function createMaterials(heatNodes, textures, layout) {
     floor.colorNode = mix(mix(color(PALETTE.floorA), color(PALETTE.floorB), n), color(PALETTE.grid), line.mul(0.55)).mul(contact);
     floor.roughnessNode = mix(float(0.2), float(0.38), n);
 
-    return { fixture, accent, metal, base, trim, image, sign, floor };
+    return { fixture, accent, metal, base, trim, image, imageRect: shelves.rectFor, sign, signRect: signs.rectFor, floor };
 }
 
 export const CATEGORY_COLORS = {
@@ -159,8 +146,54 @@ export const CATEGORY_COLORS = {
     canned: '#94a3b8', frozen: '#38bdf8', goods: '#a78bfa'
 };
 
-function signTexture(label, aspect) {
-    const W = 1024, H = Math.round(W / aspect);
+// UV rect helper: canvas pixel rect -> texture UV rect (CanvasTexture flips Y).
+const uvRect = (x, y, w, h, W, H) => ({ u0: x / W, u1: (x + w) / W, v0: 1 - (y + h) / H, v1: 1 - y / H });
+
+// Shelf photos packed 4x2 into 1024px cells, each inset by a gutter whose
+// pixels are a stretched copy of the image edge (no mip bleeding).
+function createShelfAtlas(urls) {
+    const CELL = 1024, PAD = 16, COLS = 4;
+    const ids = [...urls.keys()];
+    const rows = Math.max(1, Math.ceil(ids.length / COLS));
+    const W = CELL * COLS, H = CELL * rows;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    g.fillStyle = '#e8e7e3';
+    g.fillRect(0, 0, W, H);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 8;
+    const rects = new Map();
+    ids.forEach((id, i) => {
+        const x = (i % COLS) * CELL, y = Math.floor(i / COLS) * CELL;
+        rects.set(id, uvRect(x + PAD, y + PAD, CELL - 2 * PAD, CELL - 2 * PAD, W, H));
+        const img = new Image();
+        img.onload = () => {
+            g.drawImage(img, x, y, CELL, CELL);                                   // gutter bleed
+            g.drawImage(img, x + PAD, y + PAD, CELL - 2 * PAD, CELL - 2 * PAD);   // the image
+            tex.needsUpdate = true;
+        };
+        img.src = urls.get(id);
+    });
+    return { texture: tex, rectFor: (id) => rects.get(id) || uvRect(0, 0, 1, 1, W, H) };
+}
+
+// All sign faces stacked into one canvas column (one row per distinct sign).
+function createSignAtlas(list) {
+    const W = 1024, GAP = 8;
+    const rows = [];
+    const seen = new Map();
+    let y = 0;
+    for (const s of list) {
+        const key = `${s.label}|${s.aspect.toFixed(2)}`;
+        if (seen.has(key)) continue;
+        const h = Math.round(W / s.aspect);
+        rows.push({ key, label: s.label || '', y, h });
+        seen.set(key, rows[rows.length - 1]);
+        y += h + GAP;
+    }
+    const H = Math.max(y, 4);
     const c = document.createElement('canvas');
     c.width = W; c.height = H;
     const tex = new THREE.CanvasTexture(c);
@@ -168,34 +201,39 @@ function signTexture(label, aspect) {
     tex.anisotropy = 8;
     const draw = () => {
         const g = c.getContext('2d');
-        g.fillStyle = '#1e1b4b';
-        g.fillRect(0, 0, W, H);
-        g.fillStyle = '#6366f1';
-        g.fillRect(0, 0, W, Math.round(H * 0.07));
-        g.fillStyle = '#ffffff';
-        g.textBaseline = 'middle';
-        let size = H * 0.36;
-        const text = label.toUpperCase();
-        g.font = `700 ${size}px Inter, "Helvetica Neue", Arial, sans-serif`;
-        if ('letterSpacing' in g) g.letterSpacing = `${Math.round(size * 0.08)}px`;
-        const maxW = W * 0.88 - 0;
-        while (g.measureText(text).width > maxW && size > 10) {
-            size *= 0.92;
-            g.font = `700 ${size}px Inter, "Helvetica Neue", Arial, sans-serif`;
-        }
-        g.textAlign = 'center';
-        g.fillText(text, W / 2, H * 0.56);
+        for (const r of rows) drawSign(g, r.label, 0, r.y, W, r.h);
         tex.needsUpdate = true;
     };
     draw();
     // Redraw once Inter has loaded so the first frame's fallback font doesn't stick.
     document.fonts?.load(`700 64px Inter`).then(draw).catch(() => {});
-    return tex;
+    return {
+        texture: tex,
+        rectFor: (label, aspect) => {
+            const r = seen.get(`${label}|${aspect.toFixed(2)}`);
+            return r ? uvRect(0, r.y, W, r.h, W, H) : uvRect(0, 0, W, H, W, H);
+        }
+    };
 }
 
-export function loadTexture(url) {
-    const tex = new THREE.TextureLoader().load(url);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 8;
-    return tex;
+function drawSign(g, label, x, y, W, H) {
+    g.save();
+    g.beginPath(); g.rect(x, y, W, H); g.clip();
+    g.fillStyle = '#1e1b4b';
+    g.fillRect(x, y, W, H);
+    g.fillStyle = '#6366f1';
+    g.fillRect(x, y, W, Math.round(H * 0.07));
+    g.fillStyle = '#ffffff';
+    g.textBaseline = 'middle';
+    g.textAlign = 'center';
+    let size = H * 0.36;
+    const text = label.toUpperCase();
+    g.font = `700 ${size}px Inter, "Helvetica Neue", Arial, sans-serif`;
+    if ('letterSpacing' in g) g.letterSpacing = `${Math.round(size * 0.08)}px`;
+    while (g.measureText(text).width > W * 0.88 && size > 10) {
+        size *= 0.92;
+        g.font = `700 ${size}px Inter, "Helvetica Neue", Arial, sans-serif`;
+    }
+    g.fillText(text, x + W / 2, y + H * 0.56);
+    g.restore();
 }

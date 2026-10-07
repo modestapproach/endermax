@@ -26,7 +26,7 @@ page.on('pageerror', e => errors.push('pageerror: ' + e.message));
 
 const url = `${base}/?skip&${query}${forceWebGL ? '&webgl' : ''}`;
 await page.goto(url, { waitUntil: 'load' });
-await page.waitForFunction(() => window.endermax, null, { timeout: 30000 });
+await page.waitForFunction(() => window.endermax?.ready, null, { timeout: 60000 });
 await page.evaluate(() => window.endermax.frames(20));
 if (eval_) console.log('eval:', await page.evaluate(eval_));
 const stats = await page.evaluate(() => window.endermax.stats());

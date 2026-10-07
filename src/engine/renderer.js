@@ -35,12 +35,15 @@ export function setQualityPreset(name) {
     try { localStorage.setItem('endermax.quality', name); } catch { /* private mode */ }
 }
 
-export async function createRenderer({ canvas, width = window.innerWidth, height = window.innerHeight } = {}) {
+export async function createRenderer({ canvas, width = window.innerWidth, height = window.innerHeight, updateStyle = true } = {}) {
     const forceWebGL = q.has('webgl');
     const trackTimestamp = new URLSearchParams(location.search).has('bench'); // GPU timing for perf work
     const renderer = new THREE.WebGPURenderer({ canvas, antialias: QUALITY_FLAGS.msaa, alpha: false, forceWebGL, trackTimestamp });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY_FLAGS.dpr));
-    renderer.setSize(width, height, !!canvas ? false : true);
+    // updateStyle sets the canvas CSS size. Without it the canvas displays at
+    // its drawing-buffer size (CSS px x pixel ratio), overflowing the window on
+    // HiDPI screens and pushing the shopper off-centre.
+    renderer.setSize(width, height, updateStyle);
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 0.95;
     renderer.shadowMap.enabled = true;

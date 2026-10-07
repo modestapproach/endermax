@@ -88,10 +88,11 @@ async function contactSheet(entries, cellW = 640, cellH = 400) {
 }
 
 export function installDevtools(api) {
-    const { renderer, camera, layout, heat, captureFrame, capturePlan, setPose, setFirstPerson, setPointer, getPose, setFreeCamera, simulateSession, info } = api;
+    const { renderer, camera, scene, layout, heat, captureFrame, capturePlan, setPose, setFirstPerson, setPointer, getPose, setFreeCamera, simulateSession, info } = api;
 
     const endermax = {
-        layout, heat, camera, renderer,
+        layout, heat, camera, renderer, scene,
+        ready: false, // true once shaders are compiled (scripts wait on this)
         pose: (p) => { setFreeCamera(null); setPose(p); return getPose(); },
         pointer: (nx, ny) => setPointer(nx, ny),
         firstPerson: (on = true) => setFirstPerson(on),

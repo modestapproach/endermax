@@ -49,7 +49,7 @@ export async function initViewer(containerElement, sessionId, passedSnapshots = 
     const w = container.clientWidth || window.innerWidth;
     const h = container.clientHeight || window.innerHeight;
 
-    renderer = await createRenderer({ canvas, width: w, height: h });
+    renderer = await createRenderer({ canvas, width: w, height: h, updateStyle: false }); // CSS is 100% of the container
     renderer.setSize(w, h, false);
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 200);

@@ -52,17 +52,23 @@ async function init() {
         return;
     }
 
+    const T = (label) => { (window.__initTimes ||= []).push([label, Math.round(performance.now())]); };
+    T('renderer');
     layout = parseLayout();
     heat = new HeatField(layout);
     const heatNodes = createHeatNodes(heat);
+    T('heat');
     lights = createLighting(scene, renderer);
+    T('lighting');
     storeFog = scene.fog;
     world = buildWorld(layout, heatNodes);
     scene.add(world.group);
+    T('world');
 
     pathVisualizer = new PathVisualizer(scene);
     character = createCharacter(scene);
     post = createPipeline(renderer, scene, camera);
+    T('pipeline');
 
     inventory = new Inventory();
     emotionState = new EmotionState((emotion) => character.updateEmoji(emotion));
@@ -91,7 +97,7 @@ async function init() {
     window.recorder = recorder;
 
     installDevtools({
-        renderer, camera, layout, heat, captureFrame, capturePlan,
+        renderer, camera, scene, layout, heat, captureFrame, capturePlan,
         setPose, setFirstPerson, setPointer, getPose, setFreeCamera: (c) => { freeCamera = c; }, simulateSession,
         info: () => ({
             backend: backendName(renderer), fps,
@@ -113,8 +119,59 @@ async function init() {
     if (flags.cam) window.endermax.cam(flags.cam);
     else setPose({ x: -1.2, z: 24, yaw: 0, pitch: -0.08 }); // spawn at the aisle mouth, looking down it
 
+    T('init-done');
+    // Compile every shader pipeline up front, off the main thread, so the
+    // first frames don't stall for seconds (cold shader caches made the first
+    // interactive moment take ~30s on some machines).
+    await precompile();
+    T('precompiled');
+    // One warm-up frame compiles what compileAsync can't reach (shadow depth
+    // and post passes) while the intro pages still cover the canvas.
+    tick(0);
+    renderFrame();
+    setLoading(null);
+    T('warm-frame');
+    markReady();
+    window.endermax.ready = true;
     renderer.setAnimationLoop(animate);
 }
+
+// Small "preparing" pill under the intro pages; visible only if someone gets
+// to the store before shaders finish compiling.
+const loadingEl = document.getElementById('sim-loading');
+function setLoading(pct) {
+    if (!loadingEl) return;
+    if (pct === null) { loadingEl.classList.add('done'); return; }
+    loadingEl.querySelector('span').textContent = `${pct}%`;
+}
+
+async function precompile() {
+    try {
+        const pass = post.scenePass;
+        const culled = [];
+        scene.traverse(o => { if (o.frustumCulled) { culled.push(o); o.frustumCulled = false; } });
+        // Compile against the post-processing scene pass's target + MRT, which
+        // is what the first real frame will request.
+        pass.renderTarget.samples = renderer.samples;
+        renderer.setRenderTarget(pass.renderTarget);
+        renderer.setMRT(pass.getMRT());
+        await renderer.compileAsync(scene, camera, null, (e) => {
+            if (e.lengthComputable && e.total) setLoading(Math.round(e.loaded / e.total * 100));
+        });
+        renderer.setMRT(null);
+        renderer.setRenderTarget(null);
+        for (const o of culled) o.frustumCulled = true;
+    } catch (e) {
+        console.warn('Shader precompile skipped:', e);
+        renderer.setMRT(null);
+        renderer.setRenderTarget(null);
+    }
+}
+
+// Full-screen intro pages hide the store: don't pay to render it underneath.
+const overlayEls = ['front-page', 'landing-page'].map(id => document.getElementById(id)).filter(Boolean);
+const introEl = document.getElementById('intro-modal');
+const isShown = (el) => el && !el.classList.contains('hidden') && el.style.display !== 'none' && el.getClientRects().length > 0;
 
 function renderFrame() {
     if (world.shadowsDirty) { lights.sun.shadow.needsUpdate = true; world.shadowsDirty = false; }
@@ -128,7 +185,13 @@ function renderFrame() {
 let captureRT = null;
 const captureCanvas = document.createElement('canvas');
 let capturing = false;
+// Resolves once shaders are compiled and the warm-up frame has rendered.
+// Captures wait on it: rendering mid-compile swaps the render target/MRT
+// the async compile is building pipelines for.
+let markReady;
+const simReady = new Promise(r => { markReady = r; });
 async function captureFrame(type = 'image/jpeg', quality = 0.5, { width = 960, height = 600 } = {}) {
+    await simReady;
     const w = Math.max(64, Math.round(width / 64) * 64); // WebGPU readback rows align to 256 bytes
     const h = Math.round(height);
     const prevSize = renderer.getSize(new THREE.Vector2());
@@ -334,6 +397,9 @@ for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel']) {
 
 function animate(time = performance.now()) {
     if (capturing) return; // don't present a different frame mid-capture
+    // Opaque intro pages: render nothing. Translucent intro modal: ~10fps.
+    if (overlayEls.some(isShown)) return;
+    if (isShown(introEl) && time - lastFrame < 100) return;
     // Idle = no input for 10s. Staring at a shelf without moving the mouse is
     // a normal way to use the sim, so the idle rate stays smooth (30fps).
     const idle = time - lastInput > 10000 && !isTestActive;
@@ -346,6 +412,7 @@ function animate(time = performance.now()) {
     const t1 = performance.now();
     renderFrame();
     const t2 = performance.now();
+    if (perf.frames < 5) (window.__initTimes ||= []).push(['frame' + perf.frames, Math.round(t2 - t1)]);
     perf.tick = ema(perf.tick, t1 - t0);
     perf.render = ema(perf.render, t2 - t1);
     perf.draws = renderer.info.render.drawCalls; // sampled on rendered frames (capped frames skip)

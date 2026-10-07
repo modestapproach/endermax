@@ -13,7 +13,8 @@
     "textures": "node scripts/process-textures.mjs",
     "flow": "node scripts/flow.mjs",
     "bench": "node scripts/bench.mjs",
-    "parity": "node scripts/parity-v1.mjs"
+    "parity": "node scripts/parity-v1.mjs",
+    "loadtime": "node scripts/loadtime.mjs"
   },
   "devDependencies": {
     "playwright": "^1.63.0",

@@ -15,7 +15,7 @@ const shot = (n) => page.screenshot({ path: `.shots/${prefix}-${n}.png` });
 const visible = (sel) => page.locator(sel).first().isVisible().catch(() => false);
 
 await page.goto('http://localhost:5174/');
-await page.waitForFunction(() => window.endermax, null, { timeout: 30000 });
+await page.waitForFunction(() => window.endermax?.ready, null, { timeout: 60000 });
 await shot('1-front');
 
 await page.click('#front-page').catch(() => {});

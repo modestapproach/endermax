@@ -7,7 +7,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { UNIT } from './layout.js';
-import { createMaterials, loadTexture } from './materials.js';
+import { createMaterials } from './materials.js';
 
 const textureUrls = import.meta.glob('../assets/textures/**/*.{webp,png,jpg,jpeg}', { eager: true, query: '?url', import: 'default' });
 // Matted shelf photos (npm run textures) take precedence over the originals.
@@ -22,6 +22,16 @@ function urlFor(globbed, id) {
 const Y_TOP_WALL = 10.5 * UNIT;   // top of level 10
 const Y_KICK = 0.5 * UNIT;        // bottom of level 1: below this is the kick plate
 
+// BoxGeometry has 4 vertices per face, faces ordered +x,-x,+y,-y,+z,-z.
+function remapFaceUVs(geo, faces, r) {
+    const uvs = geo.attributes.uv;
+    for (const f of faces) for (let k = 0; k < 4; k++) {
+        const i = f * 4 + k;
+        uvs.setXY(i, r.u0 + uvs.getX(i) * (r.u1 - r.u0), r.v0 + uvs.getY(i) * (r.v1 - r.v0));
+    }
+    uvs.needsUpdate = true;
+}
+
 function boxAt(geo, x, y, z) {
     geo.translate(x, y, z);
     return geo;
@@ -31,13 +41,18 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
     const group = new THREE.Group();
     group.name = 'store';
 
-    const textures = new Map();
-    for (const id of layout.imageSettings.keys()) {
-        const matted = Object.entries(shelfUrls).find(([path]) => path.endsWith(`/shelves/${id}.webp`));
-        const url = matted ? matted[1] : urlFor(textureUrls, id);
-        if (url) textures.set(id, loadTexture(url));
+    // Wall imagery (one atlas) and sign labels (another): see materials.js.
+    const shelfImageUrls = new Map();
+    for (const p of layout.panels) {
+        if (p.kind !== 'wall' || shelfImageUrls.has(p.id)) continue;
+        const matted = Object.entries(shelfUrls).find(([path]) => path.endsWith(`/shelves/${p.id}.webp`));
+        const url = matted ? matted[1] : urlFor(textureUrls, p.id);
+        if (url) shelfImageUrls.set(p.id, url);
     }
-    const mats = createMaterials(heatNodes, textures, layout);
+    const signLabel = (p) => p.label || layout.imageSettings.get(p.id)?.label || '';
+    const signAspect = (p) => (p.span * UNIT) / ((p.band[1] - p.band[0] + 1) * UNIT);
+    const signList = layout.panels.filter(p => p.kind === 'sign').map(p => ({ label: signLabel(p), aspect: signAspect(p) }));
+    const mats = createMaterials(heatNodes, { shelfUrls: shelfImageUrls, signList }, layout);
 
     const fixtureGeos = [];
     const baseGeos = [];
@@ -84,7 +99,10 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
 
         const geo = new THREE.BoxGeometry(sx, y1 - y0, sz);
         const edgeMat = isSign ? mats.accent : mats.fixture;
-        const img = isSign ? mats.sign(p.label || layout.imageSettings.get(p.id)?.label, spanLen / (y1 - y0)) : mats.image(p.id);
+        const img = isSign ? mats.sign : mats.image;
+        // Remap the two image faces' UVs into this panel's atlas cell.
+        const rect = isSign ? mats.signRect(signLabel(p), signAspect(p)) : mats.imageRect(p.id);
+        remapFaceUVs(geo, horizontal ? [0, 1] : [4, 5], rect);
         // BoxGeometry face order: +x, -x, +y, -y, +z, -z. Default per-face UVs
         // already reproduce v1's mapping (back face mirrored so it reads right).
         const faceMats = horizontal

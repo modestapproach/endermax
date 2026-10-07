@@ -1765,3 +1765,12 @@ audio.hidden,
     font: inherit;
 }
 .quality-select option { color: #111; }
+
+.sim-loading {
+    position: fixed; left: 50%; bottom: 2.5rem; transform: translateX(-50%);
+    padding: 0.55rem 1rem; border-radius: 999px; z-index: 5; pointer-events: none;
+    background: rgba(17, 16, 40, 0.72); border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #e5e7eb; font-size: 0.9rem; transition: opacity 0.4s ease;
+}
+.sim-loading span { color: #a5b4fc; font-variant-numeric: tabular-nums; }
+.sim-loading.done { opacity: 0; }

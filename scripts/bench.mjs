@@ -11,7 +11,7 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, dev
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
 await page.goto(`http://localhost:5174/?skip&cam=aisle&heat=demo&bench${extra}`);
-await page.waitForFunction(() => window.endermax, null, { timeout: 30000 });
+await page.waitForFunction(() => window.endermax?.ready, null, { timeout: 60000 });
 await page.waitForTimeout(1500);
 // Sweep the gaze across both shelf faces while walking forward.
 await page.keyboard.down('w');
