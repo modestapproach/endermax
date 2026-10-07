@@ -1,4 +1,37 @@
-# Stability Notes — endermax-v3 (2026-08-27)
+# Stability Notes: v2 (2026-10-07)
+
+## Verified (automated, headless Chromium with WebGPU, plus the WebGL2 fallback)
+
+- Sim boots on WebGPU and on forced WebGL2 (`?webgl`) with zero console errors.
+- All camera presets render correctly (`npm run shots`). The contact sheets were
+  reviewed each pass by a separate critic agent against an art brief.
+- Real onboarding flow with real input (`npm run flow`): front page, landing, intro,
+  tutorial; WASD movement, arrow turning, mouse gaze hitting shelves and
+  accumulating heat; collision; spring-arm camera.
+- Research loop without a human (`npm run e2e`): a simulated session writes real
+  Dexie records (heat, path, 2s snapshots with frame + plan captures), the results
+  page renders, and the 3D replay opens with heat, path, pins and the ghost shopper
+  on snapshot select.
+- `npm run build` is green.
+
+## Changed behavior in v2
+
+- Gaze in third person now follows the cursor exactly: the camera ray picks the
+  aim point and the gaze ray is cast from the shopper's eyes toward it. v1
+  approximated a direction from the cursor's screen offset.
+- The shopper collides with fixtures. v1 allowed walking through shelves.
+- Bird's-eye snapshots are 2D plan maps, not top-down renders.
+- Heat rates, AoE radius and grid keys are unchanged, so recorded data stays
+  comparable to v1.
+
+## Not yet verified end to end
+
+- A real mic/cam session with transcription, AI summary and TTS (the code paths
+  are unchanged from v1).
+
+---
+
+# v1 notes (endermax-v3, 2026-08-27)
 
 This folder was copied from `endermax` (branch `3D-analysis`, last commit Dec 9 2025,
 the most recent of the three endermax folders) and then hardened in staged commits.

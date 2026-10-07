@@ -17,7 +17,7 @@ function shotsPlugin() {
                 req.on('end', () => {
                     const m = body.match(/^data:image\/(png|jpeg);base64,(.*)$/);
                     if (!m) { res.statusCode = 400; return res.end('expected an image data URL'); }
-                    const dir = resolve(__dirname, '.shots');
+                    const dir = resolve(import.meta.dirname, '.shots');
                     mkdirSync(dir, { recursive: true });
                     const file = resolve(dir, `${name}.${m[1] === 'jpeg' ? 'jpg' : 'png'}`);
                     writeFileSync(file, Buffer.from(m[2], 'base64'));
@@ -42,11 +42,16 @@ export default defineConfig(({ mode }) => {
         plugins: [shotsPlugin()],
         assetsInclude: ['**/*.glb'],
         build: {
+            chunkSizeWarningLimit: 1500,
             rollupOptions: {
                 input: {
-                    main: resolve(__dirname, 'index.html'),
-                    results: resolve(__dirname, 'results.html'),
-                    portfolio: resolve(__dirname, 'portfolio.html')
+                    main: resolve(import.meta.dirname, 'index.html'),
+                    results: resolve(import.meta.dirname, 'results.html'),
+                    portfolio: resolve(import.meta.dirname, 'portfolio.html')
+                },
+                output: {
+                    // three.js is shared by the sim and the results replay.
+                    advancedChunks: { groups: [{ name: 'three', test: /node_modules[\\/]three/ }] }
                 },
             }
         },
