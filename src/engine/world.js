@@ -57,22 +57,6 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         trimGeos.push(boxAt(new RoundedBoxGeometry(w + 0.05, 0.07, d + 0.05, 1, 0.02), cx, Y_TOP_WALL + 0.035, cz));
     }
 
-    // End-cap headers: an indigo header on each gondola end naming the
-    // categories on either side (end caps are the 1-wide column runs).
-    for (const r of layout.columns) {
-        const depth = r.gx1 - r.gx0 + 1;
-        if (r.gz0 !== r.gz1 || depth < 4) continue;
-        const near = layout.panels.filter(p => p.kind === 'wall' && (p.gx0 === r.gx0 || p.gx0 === r.gx1) && Math.min(Math.abs(p.gz0 - r.gz0), Math.abs(p.gz1 - r.gz0)) <= 2);
-        const names = [...new Set(near.map(p => p.label).filter(Boolean))];
-        if (!names.length) continue;
-        const outward = near.some(p => p.gz0 > r.gz0) ? -1 : 1; // header faces away from the bays
-        const w = depth * UNIT;
-        const header = new THREE.Mesh(new THREE.BoxGeometry(w, 0.62, 0.06), mats.sign(names.join(' · '), w / 0.62));
-        header.position.set((r.gx0 + r.gx1) / 2 * UNIT, Y_TOP_WALL - 0.42, r.gz0 * UNIT + outward * (UNIT / 2 + 0.035));
-        header.receiveShadow = true;
-        group.add(header);
-    }
-
     // Product walls and hanging signs: one box each, imagery on the broad faces.
     for (const p of layout.panels) {
         const horizontal = p.orientation === 'horizontal';

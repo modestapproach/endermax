@@ -1711,3 +1711,50 @@ audio.hidden,
         width: min(300px, 70vw);
     }
 }
+
+
+/* ---------------------------------------------------------------------------
+   v2 HUD: one brand system over the bright store.
+   --------------------------------------------------------------------------- */
+:root {
+    --glass-bg: rgba(17, 16, 40, 0.62);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --text-secondary: #a5a6c4;
+    --heat-ramp: linear-gradient(90deg, #ffffff 0%, #60a5fa 20%, #22c55e 40%, #facc15 60%, #f97316 80%, #ef4444 100%);
+}
+
+.glass-card {
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    border-radius: 14px;
+    padding: 1.15rem 1.25rem;
+    box-shadow: 0 12px 32px rgba(15, 12, 40, 0.28);
+}
+
+.right-panel-container { gap: 0.6rem; width: 280px; }
+
+.instructions p { margin: 0.25rem 0; color: #e5e7eb; }
+.key-hint { font-family: 'Inter', sans-serif; font-size: 0.8rem; color: #c7d2fe; background: rgba(255, 255, 255, 0.08); }
+
+.legend.legend-v2 { gap: 0; height: 6px; border-radius: 999px; background: var(--heat-ramp); }
+.legend-labels { display: flex; justify-content: space-between; margin-top: 0.35rem; font-size: 0.75rem; color: var(--text-secondary); }
+
+/* Secondary actions are ghost buttons; the brand fill is reserved for primary/active. */
+.btn-camera, .btn-settings {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #e5e7eb;
+}
+.btn-camera:hover, .btn-settings:hover { background: rgba(255, 255, 255, 0.09); border-color: rgba(255, 255, 255, 0.22); }
+.btn-camera.active { background: var(--accent-color); border-color: var(--accent-hover); color: #fff; }
+
+.btn-record {
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #e5e7eb;
+}
+.btn-record:hover { background: rgba(255, 255, 255, 0.1); }
+.rec-dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18); }
+
+.items-section h3 { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-secondary); font-weight: 600; }

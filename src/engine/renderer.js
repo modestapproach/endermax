@@ -2,8 +2,7 @@
 // shadows, and a TSL post stack: GTAO contact shadows + bloom on heat glow.
 
 import * as THREE from 'three/webgpu';
-import { pass, mrt, output, normalView, emissive, builtinAOContext, screenUV, vec4, vec3, vec2, float, smoothstep, length, metalness, roughness } from 'three/tsl';
-import { ssr } from 'three/examples/jsm/tsl/display/SSRNode.js';
+import { pass, mrt, output, normalView, emissive, builtinAOContext, screenUV, vec4, vec3, float, smoothstep, length } from 'three/tsl';
 import { ao } from 'three/examples/jsm/tsl/display/GTAONode.js';
 import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -36,7 +35,7 @@ export function createLighting(scene, renderer) {
     scene.environment = envRT.texture;
     scene.environmentIntensity = 0.5;
 
-    const hemi = new THREE.HemisphereLight('#ffffff', '#b9b2a6', 0.35);
+    const hemi = new THREE.HemisphereLight('#ffffff', '#8a8478', 0.4);
     scene.add(hemi);
 
     // Key light: high, slightly warm, casting the whole store's shadows.
@@ -56,7 +55,7 @@ export function createLighting(scene, renderer) {
 }
 
 // Post stack. Returns a pipeline whose .render() replaces renderer.render().
-export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloomEnabled = true, ssrEnabled = true } = {}) {
+export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloomEnabled = true } = {}) {
     const pipeline = new THREE.RenderPipeline(renderer);
 
     const scenePass = pass(scene, camera);
@@ -64,9 +63,9 @@ export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloo
     const color = scenePass.getTextureNode('output');
     let out = color;
 
-    // Single-sample pre-pass: depth, view normals, and metal/rough for AO + SSR.
+    // Single-sample pre-pass for GTAO: depth + view normals.
     const prePass = pass(scene, camera, { samples: 0 });
-    prePass.setMRT(mrt({ output: normalView, metalrough: vec2(metalness, roughness) }));
+    prePass.setMRT(mrt({ output: normalView }));
     prePass.transparent = false;
     const preDepth = prePass.getTextureNode('depth');
     const preNormal = prePass.getTextureNode();
@@ -81,18 +80,6 @@ export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloo
         scenePass.contextNode = builtinAOContext(aoPass.getTextureNode().sample(screenUV).r);
     }
 
-    // Screen-space reflections: the polished floor picks up the LED runs and
-    // shelving. Rough surfaces blur out naturally via the roughness input.
-    let ssrPass = null;
-    if (ssrEnabled) {
-        const mr = prePass.getTextureNode('metalrough');
-        ssrPass = ssr(color, preDepth, preNormal, { metalnessNode: mr.r, roughnessNode: mr.g, reflectNonMetals: true, camera });
-        ssrPass.resolutionScale = 0.5;
-        ssrPass.maxDistance.value = 10;
-        ssrPass.thickness.value = 0.06;
-        out = out.add(vec4(ssrPass.rgb.mul(0.55), 0));
-    }
-
     let bloomPass = null;
     if (bloomEnabled) {
         bloomPass = bloom(scenePass.getTextureNode('emissive'), 0.9, 0.35, 0.0);
@@ -104,5 +91,5 @@ export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloo
     out = out.mul(vec4(vec3(v.mul(-0.16).add(1)), 1));
 
     pipeline.outputNode = out;
-    return { pipeline, scenePass, aoPass, bloomPass, ssrPass };
+    return { pipeline, scenePass, aoPass, bloomPass };
 }

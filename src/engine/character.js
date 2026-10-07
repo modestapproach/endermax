@@ -3,7 +3,7 @@
 // Forward is local -Z (matches v1 camera and gaze math).
 
 import * as THREE from 'three/webgpu';
-import { uv, float, smoothstep, mix, color, uniform, time, sin } from 'three/tsl';
+import { uv, float, smoothstep, mix, color, uniform, time, sin, normalView, positionViewDirection, dot, pow } from 'three/tsl';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
 export const EYE_HEIGHT = 2.75;
@@ -17,6 +17,11 @@ export function createCharacter(scene) {
     const dark = new THREE.MeshStandardNodeMaterial({ color: '#2b2b35', roughness: 0.6, metalness: 0.05 });
     const visorMat = new THREE.MeshPhysicalNodeMaterial({ color: '#1e1b4b', roughness: 0.06, metalness: 0.3, clearcoat: 1, clearcoatRoughness: 0.03, side: THREE.DoubleSide });
     const visorGlow = new THREE.MeshStandardNodeMaterial({ color: '#818cf8', emissive: '#818cf8', emissiveIntensity: 1.6 });
+    // Soft indigo rim so the figure separates from white shelving.
+    const fresnel = pow(float(1).sub(dot(normalView, positionViewDirection).clamp(0, 1)), 3);
+    jacket.emissiveNode = color('#6366f1').mul(fresnel.mul(0.45));
+    shell.emissiveNode = color('#a5b4fc').mul(fresnel.mul(0.18));
+    const bodyMaterials = [shell, jacket, dark, visorMat, visorGlow];
 
     const pelvis = new THREE.Group();
     pelvis.position.y = 1.3;
@@ -212,5 +217,23 @@ export function createCharacter(scene) {
         emojiMaterial.opacity = 1;
     }
 
-    return { person, head, beam, reticle, setGaze, animate, updateEmoji, beamOpacity };
+    // Fades the figure when the camera is pulled in close (spring arm), so it
+    // never blocks the shelf the participant is studying.
+    let fade = 1;
+    function setFade(a) {
+        a = Math.round(a * 50) / 50;
+        if (a === fade) return;
+        const wasOpaque = fade >= 1, isOpaque = a >= 1;
+        fade = a;
+        for (const m of bodyMaterials) {
+            m.opacity = a;
+            if (wasOpaque !== isOpaque) {
+                m.transparent = !isOpaque;
+                m.depthWrite = isOpaque;
+                m.needsUpdate = true;
+            }
+        }
+    }
+
+    return { person, head, beam, reticle, setGaze, animate, updateEmoji, beamOpacity, setFade };
 }

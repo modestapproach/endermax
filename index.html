@@ -227,8 +227,7 @@
                                 <div class="audio-test-inline-controls"
                                     style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
                                     <div style="display: flex; gap: 0.5rem;">
-                                        <button id="startTestRecordBtn" class="btn btn-primary" style="flex: 1;">🔴
-                                            Record</button>
+                                        <button id="startTestRecordBtn" class="btn btn-record" style="flex: 1;"><span class="rec-dot"></span>Record</button>
                                         <button id="playTestAudioBtn" class="btn btn-secondary hidden"
                                             style="flex: 1;">▶️ Play</button>
                                     </div>
@@ -333,19 +332,12 @@
                 <!-- Removed App Title -->
                 <div class="instructions">
                     <p>Move <span class="key-hint">WASD</span> or <span class="key-hint">Arrows</span> to walk</p>
-                    <p>Drag to rotate view</p>
-                    <p>Move mouse to look around</p>
+                    <p>Point to look · Drag to turn</p>
                 </div>
                 <div class="control-group" style="margin-top: 1rem;">
-                    <div class="control-label">Heat Intensity</div>
-                    <div class="legend">
-                        <div class="legend-item" style="background: #ffffff"></div>
-                        <div class="legend-item" style="background: #60a5fa"></div>
-                        <div class="legend-item" style="background: #22c55e"></div>
-                        <div class="legend-item" style="background: #facc15"></div>
-                        <div class="legend-item" style="background: #f97316"></div>
-                        <div class="legend-item" style="background: #ef4444"></div>
-                    </div>
+                    <div class="control-label">Gaze heat</div>
+                    <div class="legend legend-v2" aria-label="Gaze heat from low to high"></div>
+                    <div class="legend-labels"><span>low</span><span>high</span></div>
                 </div>
             </div>
 
@@ -371,7 +363,7 @@
                 <hr class="panel-divider">
 
                 <div class="items-section">
-                    <h3>Items:</h3>
+                    <h3>Collected</h3>
                     <div id="items-list" class="items-list">
                         <span class="no-items">No items collected</span>
                     </div>

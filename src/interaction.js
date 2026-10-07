@@ -239,6 +239,7 @@ function updateCamera(dt) {
             camera.position.z - Math.cos(yaw) * Math.cos(pitch)
         );
         camera.lookAt(_look);
+        ctx.character.setFade(1);
         ctx.character.person.visible = false;
         snapCamera = true;
         return;
@@ -274,6 +275,9 @@ function updateCamera(dt) {
     const wanted = armHit ? Math.max(armHit.distance - 0.35, 0.8) : armLen;
     armCurrent = wanted < armCurrent || snapCamera ? wanted : armCurrent + (wanted - armCurrent) * (1 - Math.exp(-4 * dt));
     _camPos.copy(_armOrigin).addScaledVector(_armDir, armCurrent);
+
+    // Close arm -> ghost the figure so it doesn't wall off the view.
+    ctx.character.setFade(THREE.MathUtils.clamp((armCurrent - 1.6) / 1.8, 0.22, 1));
 
     const k = snapCamera ? 1 : 1 - Math.exp(-10 * dt);
     camera.position.lerp(_camPos, k);

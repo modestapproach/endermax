@@ -31,7 +31,7 @@ export class AudioTest {
             try {
                 await this.startTestRecording();
                 startBtn.disabled = true;
-                startBtn.textContent = '⏺️ Recording...';
+                startBtn.innerHTML = '<span class="rec-dot"></span>Recording…';
                 statusEl.innerHTML = '<span class="recording-indicator"></span>Recording...';
 
                 let countdown = 3;
@@ -46,7 +46,7 @@ export class AudioTest {
                     clearInterval(countdownInterval);
                     await this.stopTestRecording();
                     startBtn.disabled = false;
-                    startBtn.textContent = '🔴 Record Again';
+                    startBtn.innerHTML = '<span class="rec-dot"></span>Record again';
                     playBtn.classList.remove('hidden');
 
                     // Show audio player

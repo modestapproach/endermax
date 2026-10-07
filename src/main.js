@@ -102,7 +102,7 @@ async function init() {
     }
     if (flags.heat === 'demo') createDemoHeat(layout, heat);
     if (flags.cam) window.endermax.cam(flags.cam);
-    else setPose({ x: 0, z: 0, yaw: 0, pitch: 0 });
+    else setPose({ x: -1.2, z: 24, yaw: 0, pitch: -0.08 }); // spawn at the aisle mouth, looking down it
 
     renderer.setAnimationLoop(animate);
 }

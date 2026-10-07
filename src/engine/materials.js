@@ -64,7 +64,7 @@ export function createMaterials(heatNodes, textures) {
 
     // Kick plates and shelf lips: a dark band that grounds the white fixtures.
     const base = new THREE.MeshStandardNodeMaterial({ roughness: 0.5, metalness: 0.2 });
-    base.colorNode = withRim(tint(color('#34343d')));
+    base.colorNode = withRim(tint(color('#4a4a55')));
     base.emissiveNode = glow;
     base.maskNode = cutoutMask;
 

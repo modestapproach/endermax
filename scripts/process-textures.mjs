@@ -89,7 +89,9 @@ for (const id of settings) {
         const smooth = blur(fg, 3);
         const mask = new Float32Array(W * H);
         for (let p = 0; p < W * H; p++) {
-            const t = Math.min(Math.max((smooth[p] - 0.3) / 0.35, 0), 1);
+            // Threshold above 0.5 erodes the matte ~1px, trimming the light rim the
+            // studio backdrop left around product tops.
+            const t = Math.min(Math.max((smooth[p] - 0.48) / 0.3, 0), 1);
             mask[p] = t * t * (3 - 2 * t);
         }
         const alpha = blur(mask, 1);
