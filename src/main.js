@@ -70,7 +70,7 @@ async function init() {
     });
     recorder = new Recorder(character.person, emotionState, { frame: captureFrame, plan: () => capturePlan(512) });
 
-    setupControls({ camera, character, world, heat, inventory });
+    setupControls({ camera, character, world, heat, inventory, layout });
     attachUIHandlers(heat);
     window.addEventListener('resize', () => onWindowResize(camera, renderer));
 

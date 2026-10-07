@@ -47,8 +47,14 @@ export function getPose() {
     return p ? { x: p.x, z: p.z, yaw, pitch, firstPerson: isFirstPerson } : null;
 }
 
+// Floor-standing fixture footprint ("gx,gz" -> true) for player collision.
+let blocked = new Set();
+const PLAYER_RADIUS = 0.38;
+
 export function setupControls(context) {
     ctx = context;
+    blocked = new Set();
+    for (const c of ctx.layout.cells.values()) if (c.gy <= 10) blocked.add(`${c.gx},${c.gz}`);
     // Pointer events cover mouse, pen, and touch.
     document.addEventListener('pointerdown', onPointerDown, false);
     document.addEventListener('pointermove', onPointerMove, false);
@@ -175,7 +181,15 @@ export function updateMovement(dt) {
     // Ease toward the wished velocity: quick start, soft stop.
     const accel = _wish.lengthSq() > 0 ? 14 : 10;
     _velocity.lerp(_wish, 1 - Math.exp(-accel * dt));
-    person.position.addScaledVector(_velocity, dt);
+    // Axis-separated moves so the shopper slides along shelves instead of
+    // passing through them (sub-stepped so fast frames can't tunnel).
+    const steps = Math.max(1, Math.ceil(_velocity.length() * dt / 0.2));
+    for (let i = 0; i < steps; i++) {
+        const nx = person.position.x + _velocity.x * dt / steps;
+        if (!collides(nx, person.position.z)) person.position.x = nx; else _velocity.x = 0;
+        const nz = person.position.z + _velocity.z * dt / steps;
+        if (!collides(person.position.x, nz)) person.position.z = nz; else _velocity.z = 0;
+    }
     person.position.x = Math.max(-WORLD_BOUND, Math.min(WORLD_BOUND, person.position.x));
     person.position.z = Math.max(-WORLD_BOUND, Math.min(WORLD_BOUND, person.position.z));
     currentSpeed = _velocity.length();
@@ -189,12 +203,30 @@ export function updateMovement(dt) {
     checkProximity(person);
 }
 
+function collides(x, z) {
+    const U = 0.5, r = PLAYER_RADIUS;
+    const g0x = Math.round((x - r) / U), g1x = Math.round((x + r) / U);
+    const g0z = Math.round((z - r) / U), g1z = Math.round((z + r) / U);
+    for (let gx = g0x; gx <= g1x; gx++) for (let gz = g0z; gz <= g1z; gz++) {
+        if (!blocked.has(`${gx},${gz}`)) continue;
+        // Circle vs cell square
+        const cx = Math.max(gx * U - U / 2, Math.min(x, gx * U + U / 2));
+        const cz = Math.max(gz * U - U / 2, Math.min(z, gz * U + U / 2));
+        if ((x - cx) ** 2 + (z - cz) ** 2 < r * r) return true;
+    }
+    return false;
+}
+
 // --- Camera rig ----------------------------------------------------------------
 let snapCamera = true;
 const _camTarget = new THREE.Vector3();
 const _camPos = new THREE.Vector3();
 const _look = new THREE.Vector3();
 const _smoothLook = new THREE.Vector3();
+const _armOrigin = new THREE.Vector3();
+const _armDir = new THREE.Vector3();
+const _armRay = new THREE.Raycaster();
+let armCurrent = 6;
 
 function updateCamera(dt) {
     const { camera } = ctx;
@@ -229,6 +261,19 @@ function updateCamera(dt) {
         person.position.y + EYE_HEIGHT - 0.35,
         person.position.z - Math.cos(yaw) * 4 + rz * side * 0.6
     );
+
+    // Spring arm: if a fixture sits between the head and the ideal camera
+    // spot, pull the camera in front of it (snaps in, eases back out).
+    _armOrigin.set(person.position.x, person.position.y + EYE_HEIGHT, person.position.z);
+    _armDir.subVectors(_camPos, _armOrigin);
+    const armLen = _armDir.length();
+    _armDir.divideScalar(armLen);
+    _armRay.set(_armOrigin, _armDir);
+    _armRay.far = armLen;
+    const armHit = _armRay.intersectObjects(ctx.world.raycastTargets, false)[0];
+    const wanted = armHit ? Math.max(armHit.distance - 0.35, 0.8) : armLen;
+    armCurrent = wanted < armCurrent || snapCamera ? wanted : armCurrent + (wanted - armCurrent) * (1 - Math.exp(-4 * dt));
+    _camPos.copy(_armOrigin).addScaledVector(_armDir, armCurrent);
 
     const k = snapCamera ? 1 : 1 - Math.exp(-10 * dt);
     camera.position.lerp(_camPos, k);
