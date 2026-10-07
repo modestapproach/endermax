@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "shots": "node scripts/shots.mjs",
-    "e2e": "node scripts/e2e-results.mjs"
+    "e2e": "node scripts/e2e-results.mjs",
+    "textures": "node scripts/process-textures.mjs"
   },
   "devDependencies": {
     "playwright": "^1.63.0",

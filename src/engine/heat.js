@@ -168,18 +168,21 @@ export function createHeatNodes(field) {
     const heatColor = texture(ramp, vec2(heat, 0.5)).rgb;
     // Fill: nothing below 0.06, capped at 0.6 so packaging stays readable.
     const heatMix = smoothstep(float(0.06), float(0.45), heat).mul(0.6);
-    // Contour lines every 1/6 of the range make heat read as data, not paint.
-    const bands = heat.mul(6);
-    const contour = smoothstep(fwidth(bands).mul(1.2), float(0), abs(fract(bands).sub(0.5)).mul(2).oneMinus())
-        .mul(smoothstep(float(0.22), float(0.32), heat)).mul(0.8);
+    // Contours at 0.4 / 0.6 / 0.8, drawn in the ramp colour of their level.
+    const bands = heat.mul(5);
+    const w = fwidth(bands);
+    const contour = float(1).sub(smoothstep(float(0), w.mul(1.25), abs(fract(bands.add(0.5)).sub(0.5))))
+        .mul(smoothstep(float(0.34), float(0.4), heat)).mul(0.75);
     const tint = (base) => {
         // Desaturate what's under heat so the ramp has something to sit on.
         const grey = vec3(luminance(base));
         const under = mix(base, grey, heatMix.mul(1.2).min(0.6));
-        return mix(mix(under, heatColor, heatMix), heatColor.mul(0.85), contour);
+        return mix(mix(under, heatColor, heatMix), heatColor.mul(0.8), contour);
     };
+    const fixtureGate = smoothstep(float(0.28), float(0.4), heat);
+    const tintFixture = (base) => mix(base, mix(mix(base, heatColor, heatMix), heatColor.mul(0.8), contour), fixtureGate);
     // Only genuinely hot spots glow (bloom), so low heat never haloes.
     const glow = heatColor.mul(smoothstep(float(0.6), float(1.0), heat).mul(0.35));
 
-    return { heat, heatColor, heatMix, tint, glow, strength, ramp };
+    return { heat, heatColor, heatMix, tint, tintFixture, glow, strength, ramp };
 }

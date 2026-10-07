@@ -31,5 +31,12 @@ await page.evaluate(() => window.endermax.frames(20));
 if (eval_) console.log('eval:', await page.evaluate(eval_));
 const stats = await page.evaluate(() => window.endermax.stats());
 const files = await page.evaluate((p) => window.endermax.tour(p), prefix);
+// Full-page screenshot too, so DOM overlays (HUD, panels) are reviewed with the 3D.
+if (args.includes('--page')) {
+    await page.evaluate(() => window.endermax.cam('aisle'));
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: `.shots/${prefix}-page.png` });
+    files.push(`.shots/${prefix}-page.png`);
+}
 console.log(JSON.stringify({ url, stats, files, errors: [...new Set(errors)].slice(0, 15) }, null, 2));
 await browser.close();

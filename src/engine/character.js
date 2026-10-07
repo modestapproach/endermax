@@ -13,7 +13,7 @@ export function createCharacter(scene) {
     person.name = 'shopper';
 
     const shell = new THREE.MeshPhysicalNodeMaterial({ color: '#f4f4f6', roughness: 0.45, clearcoat: 0.25, clearcoatRoughness: 0.4 });
-    const jacket = new THREE.MeshPhysicalNodeMaterial({ color: '#4f46e5', roughness: 0.55, sheen: 0.4, sheenColor: '#a5b4fc' });
+    const jacket = new THREE.MeshPhysicalNodeMaterial({ color: '#4f46e5', roughness: 0.75, sheen: 0.4, sheenColor: '#a5b4fc' });
     const dark = new THREE.MeshStandardNodeMaterial({ color: '#2b2b35', roughness: 0.6, metalness: 0.05 });
     const visorMat = new THREE.MeshPhysicalNodeMaterial({ color: '#1e1b4b', roughness: 0.06, metalness: 0.3, clearcoat: 1, clearcoatRoughness: 0.03, side: THREE.DoubleSide });
     const visorGlow = new THREE.MeshStandardNodeMaterial({ color: '#818cf8', emissive: '#818cf8', emissiveIntensity: 1.6 });
@@ -75,8 +75,8 @@ export function createCharacter(scene) {
     }
     const armL = limb(-0.43, 0.92, 0.085, 0.065, 0.78, jacket, pelvis);
     const armR = limb(0.43, 0.92, 0.085, 0.065, 0.78, jacket, pelvis);
-    armL.rotation.z = -0.1;
-    armR.rotation.z = 0.1;
+    armL.rotation.z = -0.16;
+    armR.rotation.z = 0.16;
     const handL = new THREE.Mesh(new THREE.SphereGeometry(0.075, 16, 12), shell);
     handL.scale.set(1, 1.25, 0.8);
     handL.position.y = -0.84;

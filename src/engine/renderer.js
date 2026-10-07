@@ -2,7 +2,8 @@
 // shadows, and a TSL post stack: GTAO contact shadows + bloom on heat glow.
 
 import * as THREE from 'three/webgpu';
-import { pass, mrt, output, normalView, emissive, builtinAOContext, screenUV, vec4, vec3, float, smoothstep, length } from 'three/tsl';
+import { pass, mrt, output, normalView, emissive, builtinAOContext, screenUV, vec4, vec3, vec2, float, smoothstep, length, metalness, roughness } from 'three/tsl';
+import { ssr } from 'three/examples/jsm/tsl/display/SSRNode.js';
 import { ao } from 'three/examples/jsm/tsl/display/GTAONode.js';
 import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -40,14 +41,14 @@ export function createLighting(scene, renderer) {
 
     // Key light: high, slightly warm, casting the whole store's shadows.
     const sun = new THREE.DirectionalLight('#fff1e0', 2.8);
-    sun.position.set(7, 30, 5); // high, like overhead store lighting
+    sun.position.set(1.5, 30, 3); // near-overhead: shadows pool under fixtures like store lighting
     sun.castShadow = true;
     sun.shadow.mapSize.set(4096, 4096);
     const s = sun.shadow.camera;
     s.left = -36; s.right = 36; s.top = 36; s.bottom = -36; s.near = 1; s.far = 80;
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.02;
-    sun.shadow.radius = 4;
+    sun.shadow.radius = 6;
     scene.add(sun);
     scene.add(sun.target);
 
@@ -55,7 +56,7 @@ export function createLighting(scene, renderer) {
 }
 
 // Post stack. Returns a pipeline whose .render() replaces renderer.render().
-export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloomEnabled = true } = {}) {
+export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloomEnabled = true, ssrEnabled = true } = {}) {
     const pipeline = new THREE.RenderPipeline(renderer);
 
     const scenePass = pass(scene, camera);
@@ -63,17 +64,33 @@ export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloo
     const color = scenePass.getTextureNode('output');
     let out = color;
 
+    // Single-sample pre-pass: depth, view normals, and metal/rough for AO + SSR.
+    const prePass = pass(scene, camera, { samples: 0 });
+    prePass.setMRT(mrt({ output: normalView, metalrough: vec2(metalness, roughness) }));
+    prePass.transparent = false;
+    const preDepth = prePass.getTextureNode('depth');
+    const preNormal = prePass.getTextureNode();
+
     let aoPass = null;
     if (aoEnabled) {
-        const prePass = pass(scene, camera, { samples: 0 }); // GTAO needs a single-sample depth texture
-        prePass.setMRT(mrt({ output: normalView }));
-        prePass.transparent = false;
-        aoPass = ao(prePass.getTextureNode('depth'), prePass.getTextureNode(), camera);
+        aoPass = ao(preDepth, preNormal, camera);
         aoPass.resolutionScale = 0.5;
         aoPass.radius.value = 0.6;
         aoPass.thickness.value = 1.5;
         aoPass.distanceFallOff.value = 1.0;
         scenePass.contextNode = builtinAOContext(aoPass.getTextureNode().sample(screenUV).r);
+    }
+
+    // Screen-space reflections: the polished floor picks up the LED runs and
+    // shelving. Rough surfaces blur out naturally via the roughness input.
+    let ssrPass = null;
+    if (ssrEnabled) {
+        const mr = prePass.getTextureNode('metalrough');
+        ssrPass = ssr(color, preDepth, preNormal, { metalnessNode: mr.r, roughnessNode: mr.g, reflectNonMetals: true, camera });
+        ssrPass.resolutionScale = 0.5;
+        ssrPass.maxDistance.value = 10;
+        ssrPass.thickness.value = 0.06;
+        out = out.add(vec4(ssrPass.rgb.mul(0.55), 0));
     }
 
     let bloomPass = null;
@@ -87,5 +104,5 @@ export function createPipeline(renderer, scene, camera, { aoEnabled = true, bloo
     out = out.mul(vec4(vec3(v.mul(-0.16).add(1)), 1));
 
     pipeline.outputNode = out;
-    return { pipeline, scenePass, aoPass, bloomPass };
+    return { pipeline, scenePass, aoPass, bloomPass, ssrPass };
 }

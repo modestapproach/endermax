@@ -10,6 +10,8 @@ import { UNIT } from './layout.js';
 import { createMaterials, loadTexture } from './materials.js';
 
 const textureUrls = import.meta.glob('../assets/textures/**/*.{webp,png,jpg,jpeg}', { eager: true, query: '?url', import: 'default' });
+// Matted shelf photos (npm run textures) take precedence over the originals.
+const shelfUrls = import.meta.glob('../assets/shelves/*.webp', { eager: true, query: '?url', import: 'default' });
 const modelUrls = import.meta.glob('../assets/textures/**/*.glb', { eager: true, query: '?url', import: 'default' });
 
 function urlFor(globbed, id) {
@@ -31,7 +33,8 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
 
     const textures = new Map();
     for (const id of layout.imageSettings.keys()) {
-        const url = urlFor(textureUrls, id);
+        const matted = Object.entries(shelfUrls).find(([path]) => path.endsWith(`/shelves/${id}.webp`));
+        const url = matted ? matted[1] : urlFor(textureUrls, id);
         if (url) textures.set(id, loadTexture(url));
     }
     const mats = createMaterials(heatNodes, textures);
@@ -40,6 +43,7 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
     const baseGeos = [];
     const metalGeos = [];
     const accentGeos = [];
+    const trimGeos = [];
     const raycastTargets = [];
 
     // Wall columns: rounded boxes floor to top of level 10.
@@ -50,6 +54,23 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         const cz = (r.gz0 + r.gz1) / 2 * UNIT;
         fixtureGeos.push(boxAt(new RoundedBoxGeometry(w, Y_TOP_WALL - Y_KICK, d, 2, 0.035), cx, (Y_TOP_WALL + Y_KICK) / 2, cz));
         baseGeos.push(boxAt(new THREE.BoxGeometry(w - 0.02, Y_KICK, d - 0.02), cx, Y_KICK / 2, cz));
+        trimGeos.push(boxAt(new RoundedBoxGeometry(w + 0.05, 0.07, d + 0.05, 1, 0.02), cx, Y_TOP_WALL + 0.035, cz));
+    }
+
+    // End-cap headers: an indigo header on each gondola end naming the
+    // categories on either side (end caps are the 1-wide column runs).
+    for (const r of layout.columns) {
+        const depth = r.gx1 - r.gx0 + 1;
+        if (r.gz0 !== r.gz1 || depth < 4) continue;
+        const near = layout.panels.filter(p => p.kind === 'wall' && (p.gx0 === r.gx0 || p.gx0 === r.gx1) && Math.min(Math.abs(p.gz0 - r.gz0), Math.abs(p.gz1 - r.gz0)) <= 2);
+        const names = [...new Set(near.map(p => p.label).filter(Boolean))];
+        if (!names.length) continue;
+        const outward = near.some(p => p.gz0 > r.gz0) ? -1 : 1; // header faces away from the bays
+        const w = depth * UNIT;
+        const header = new THREE.Mesh(new THREE.BoxGeometry(w, 0.62, 0.06), mats.sign(names.join(' · '), w / 0.62));
+        header.position.set((r.gx0 + r.gx1) / 2 * UNIT, Y_TOP_WALL - 0.42, r.gz0 * UNIT + outward * (UNIT / 2 + 0.035));
+        header.receiveShadow = true;
+        group.add(header);
     }
 
     // Product walls and hanging signs: one box each, imagery on the broad faces.
@@ -75,7 +96,7 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
             : [edgeMat, edgeMat, edgeMat, edgeMat, img, img];
         const mesh = new THREE.Mesh(geo, faceMats);
         mesh.position.set(cx, (y0 + y1) / 2, cz);
-        mesh.castShadow = true;
+        mesh.castShadow = !isSign;
         mesh.receiveShadow = true;
         mesh.userData.kind = p.kind;
         group.add(mesh);
@@ -84,7 +105,7 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         if (!isSign) {
             baseGeos.push(boxAt(new THREE.BoxGeometry(sx - 0.02, Y_KICK, sz - 0.02), cx, Y_KICK / 2, cz));
             // Cap that overhangs a touch, like a gondola top shelf.
-            fixtureGeos.push(boxAt(new RoundedBoxGeometry(sx + 0.06, 0.06, sz + 0.06, 1, 0.02), cx, Y_TOP_WALL + 0.03, cz));
+            trimGeos.push(boxAt(new RoundedBoxGeometry(sx + 0.05, 0.07, sz + 0.05, 1, 0.02), cx, Y_TOP_WALL + 0.035, cz));
         } else {
             accentGeos.push(boxAt(new THREE.BoxGeometry(sx + 0.03, 0.05, sz + 0.03), cx, y1 + 0.025, cz));
         }
@@ -108,14 +129,14 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
         fixtureGeos.push(boxAt(new RoundedBoxGeometry(UNIT, 4.5 * UNIT, UNIT, 2, 0.03), t.gx * UNIT, 2.25 * UNIT, t.gz * UNIT));
     }
 
-    const addMerged = (geos, material, name) => {
+    const addMerged = (geos, material, name, castShadow = true) => {
         if (!geos.length) return null;
         // Mixed index/non-index sources can't merge; normalize to non-indexed.
         const merged = mergeGeometries(geos.map(g => (g.index ? g.toNonIndexed() : g)), false);
         geos.forEach(g => g.dispose());
         const mesh = new THREE.Mesh(merged, material);
         mesh.name = name;
-        mesh.castShadow = true;
+        mesh.castShadow = castShadow;
         mesh.receiveShadow = true;
         group.add(mesh);
         raycastTargets.push(mesh);
@@ -123,8 +144,9 @@ export function buildWorld(layout, heatNodes, { loadItems = true } = {}) {
     };
     addMerged(fixtureGeos, mats.fixture, 'fixtures');
     addMerged(baseGeos, mats.base, 'kickplates');
-    addMerged(accentGeos, mats.accent, 'sign-trim');
-    addMerged(metalGeos, mats.metal, 'hardware');
+    addMerged(trimGeos, mats.trim, 'top-trim');
+    addMerged(accentGeos, mats.accent, 'sign-trim', false);
+    addMerged(metalGeos, mats.metal, 'hardware', false);
 
     // Floor
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(120 * UNIT, 120 * UNIT), mats.floor);
@@ -174,14 +196,15 @@ function buildShell(mats) {
     shell.name = 'shell';
     const { half, ceiling } = SHELL;
 
-    const ceilingMat = new THREE.MeshStandardNodeMaterial({ color: '#efece6', roughness: 0.9, side: THREE.FrontSide });
+    // Dark open ceiling: makes the LED runs pop and frames every shot.
+    const ceilingMat = new THREE.MeshStandardNodeMaterial({ color: '#24232b', roughness: 0.95, side: THREE.FrontSide });
     const ceil = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2), ceilingMat);
     ceil.rotation.x = Math.PI / 2; // faces down
     ceil.position.y = ceiling;
     shell.add(ceil);
 
     // Linear LED fixtures: emissive so bloom gives them a soft halo.
-    const stripMat = new THREE.MeshStandardNodeMaterial({ color: '#ffffff', emissive: '#fff8ee', emissiveIntensity: 2.2, roughness: 1 });
+    const stripMat = new THREE.MeshStandardNodeMaterial({ color: '#ffffff', emissive: '#fff8ee', emissiveIntensity: 4, roughness: 1 });
     const strips = [];
     for (let x = -24; x <= 24; x += 6) {
         for (let z = -24; z <= 24; z += 12) {

@@ -24,8 +24,8 @@ function drawLegend(ctx, W, H) {
     for (const [t, c] of HEAT_STOPS) g.addColorStop(t, c);
     ctx.fillStyle = g;
     ctx.fillRect(x, y, w, h);
-    ctx.fillStyle = '#3f3f46';
-    ctx.font = '11px Inter, Arial, sans-serif';
+    ctx.fillStyle = '#374151';
+    ctx.font = '12px Inter, Arial, sans-serif';
     ctx.textBaseline = 'alphabetic';
     ctx.fillText('Gaze heat', x, y - 8);
     ctx.textAlign = 'right';

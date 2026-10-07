@@ -11,10 +11,10 @@ import {
 } from 'three/tsl';
 
 export const PALETTE = {
-    fixture: '#f8f8f6',
+    fixture: '#f1f1ef',
     fixtureEdge: '#ecebe7',
-    floorA: '#dcd7cf',
-    floorB: '#d2ccc2',
+    floorA: '#e6e1d9',
+    floorB: '#dbd5cb',
     grid: '#c2bcb1',
     accent: '#4f46e5',
     backdrop: '#dcd8d1'
@@ -40,12 +40,14 @@ const cutoutRim = cutoutInFront.mul(smoothstep(cutout.radius.mul(1.06), cutout.r
 const withRim = (col) => mix(col, color('#6366f1'), cutoutRim.mul(0.45));
 
 export function createMaterials(heatNodes, textures) {
-    const { tint, glow } = heatNodes;
+    const { tint, tintFixture, glow } = heatNodes;
 
     const fixture = new THREE.MeshStandardNodeMaterial({ roughness: 0.62, metalness: 0 });
     // A whisper of large-scale noise keeps big white surfaces from reading as flat CG.
     const fixtureBase = mix(color(PALETTE.fixture), color(PALETTE.fixtureEdge), mx_noise_float(positionWorld.mul(0.9)).mul(0.5).add(0.5).mul(0.35));
-    fixture.colorNode = withRim(tint(fixtureBase));
+    // Plain fixtures only show heat that's genuinely high, so AoE bleed from
+    // product faces doesn't wash end caps and side panels.
+    fixture.colorNode = withRim(tintFixture(fixtureBase));
     fixture.emissiveNode = glow;
     fixture.maskNode = cutoutMask;
 
@@ -56,6 +58,9 @@ export function createMaterials(heatNodes, textures) {
 
     const metal = new THREE.MeshStandardNodeMaterial({ color: '#9aa0a6', roughness: 0.3, metalness: 0.9 });
     metal.maskNode = cutoutMask;
+
+    const trim = new THREE.MeshStandardNodeMaterial({ color: '#dedee3', roughness: 0.35, metalness: 0.1 });
+    trim.maskNode = cutoutMask;
 
     // Kick plates and shelf lips: a dark band that grounds the white fixtures.
     const base = new THREE.MeshStandardNodeMaterial({ roughness: 0.5, metalness: 0.2 });
@@ -69,17 +74,7 @@ export function createMaterials(heatNodes, textures) {
         if (imageMaterials.has(id)) return imageMaterials.get(id);
         const tex = textures.get(id);
         const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.55, metalness: 0 });
-        let albedo = color(PALETTE.fixture);
-        if (tex) {
-            // The product photos sit on a flat grey studio backdrop; key that
-            // grey to warm pegboard so bays read as shelving, not screens.
-            const src = texture(tex, uv()).rgb;
-            const sat = max(src.r, max(src.g, src.b)).sub(min(src.r, min(src.g, src.b)));
-            const lum = luminance(src);
-            // (linear space: sRGB #555..#ccc is roughly 0.09..0.6)
-            const key = smoothstep(float(0.06), float(0.025), sat).mul(smoothstep(float(0.07), float(0.12), lum)).mul(smoothstep(float(0.62), float(0.5), lum));
-            albedo = mix(src, color('#e9e6e0'), key.mul(0.92));
-        }
+        const albedo = tex ? texture(tex, uv()).rgb : color(PALETTE.fixture);
         m.colorNode = withRim(tint(albedo));
         m.emissiveNode = glow;
         m.maskNode = cutoutMask;
@@ -110,9 +105,9 @@ export function createMaterials(heatNodes, textures) {
     const gy = abs(fract(tile.y).sub(0.5));
     const line = smoothstep(0.485, 0.497, max(gx, gy));
     floor.colorNode = mix(mix(color(PALETTE.floorA), color(PALETTE.floorB), n), color(PALETTE.grid), line.mul(0.55));
-    floor.roughnessNode = mix(float(0.32), float(0.55), n);
+    floor.roughnessNode = mix(float(0.2), float(0.38), n);
 
-    return { fixture, accent, metal, base, image, sign, floor };
+    return { fixture, accent, metal, base, trim, image, sign, floor };
 }
 
 export const CATEGORY_COLORS = {
@@ -133,22 +128,19 @@ function signTexture(label, aspect) {
         g.fillRect(0, 0, W, H);
         g.fillStyle = '#6366f1';
         g.fillRect(0, 0, W, Math.round(H * 0.07));
-        const chip = CATEGORY_COLORS[label.toLowerCase()] || '#a5b4fc';
-        const r = H * 0.12;
-        g.fillStyle = chip;
-        g.beginPath(); g.arc(W * 0.13, H * 0.55, r, 0, Math.PI * 2); g.fill();
         g.fillStyle = '#ffffff';
         g.textBaseline = 'middle';
         let size = H * 0.36;
         const text = label.toUpperCase();
         g.font = `700 ${size}px Inter, "Helvetica Neue", Arial, sans-serif`;
         if ('letterSpacing' in g) g.letterSpacing = `${Math.round(size * 0.08)}px`;
-        const maxW = W * 0.7;
+        const maxW = W * 0.88 - 0;
         while (g.measureText(text).width > maxW && size > 10) {
             size *= 0.92;
             g.font = `700 ${size}px Inter, "Helvetica Neue", Arial, sans-serif`;
         }
-        g.fillText(text, W * 0.22, H * 0.56);
+        g.textAlign = 'center';
+        g.fillText(text, W / 2, H * 0.56);
         tex.needsUpdate = true;
     };
     draw();

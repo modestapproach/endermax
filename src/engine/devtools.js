@@ -24,11 +24,11 @@ export const flags = {
 // Named views. Free-camera presets pin the camera; pose presets move the shopper.
 export const CAMERA_PRESETS = {
     hero:  { pose: { x: -0.5, z: 15, yaw: 0.28, pitch: 0.05 } },
-    aisle: { pose: { x: -0.75, z: 26, yaw: 0, pitch: -0.1 } },
+    aisle: { pose: { x: -1.6, z: 26, yaw: 0, pitch: -0.1 } },
     fp:    { pose: { x: -1.6, z: 19, yaw: 0.32, pitch: -0.06 }, firstPerson: true },
     top:   { free: { pos: [0.01, 46, 0], target: [0, 0, 0], fov: 55 } },
     // Near-orthographic isometric: the "architectural maquette" overview.
-    iso:   { free: { pos: [62, 62, 62], target: [0, 0, 0], fov: 30 } },
+    iso:   { free: { pos: [62, 62, 62], target: [-0.5, 0, -1], fov: 23 } },
     wide:  { free: { pos: [22, 16, 24], target: [-2, 1.5, 0], fov: 50 } }
 };
 
