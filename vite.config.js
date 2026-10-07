@@ -1,5 +1,33 @@
 import { defineConfig, loadEnv } from 'vite';
 import { resolve } from 'path';
+import { mkdirSync, writeFileSync } from 'fs';
+
+// Dev-only: window.endermax.shot()/plan() POST a data URL here and it lands in
+// .shots/<name>.png, so screenshots of the live sim are real files that
+// humans, agents, and visual-review passes can open.
+function shotsPlugin() {
+    return {
+        name: 'endermax-shots',
+        configureServer(server) {
+            server.middlewares.use('/__shot', (req, res) => {
+                if (req.method !== 'POST') { res.statusCode = 405; return res.end(); }
+                const name = (new URL(req.url, 'http://x').searchParams.get('name') || 'shot').replace(/[^\w.-]/g, '_');
+                let body = '';
+                req.on('data', (c) => { body += c; });
+                req.on('end', () => {
+                    const m = body.match(/^data:image\/(png|jpeg);base64,(.*)$/);
+                    if (!m) { res.statusCode = 400; return res.end('expected an image data URL'); }
+                    const dir = resolve(__dirname, '.shots');
+                    mkdirSync(dir, { recursive: true });
+                    const file = resolve(dir, `${name}.${m[1] === 'jpeg' ? 'jpg' : 'png'}`);
+                    writeFileSync(file, Buffer.from(m[2], 'base64'));
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ path: file }));
+                });
+            });
+        }
+    };
+}
 
 export default defineConfig(({ mode }) => {
     // Load env file based on `mode` in the current working directory.
@@ -11,6 +39,7 @@ export default defineConfig(({ mode }) => {
     }
 
     return {
+        plugins: [shotsPlugin()],
         assetsInclude: ['**/*.glb'],
         build: {
             rollupOptions: {
@@ -19,14 +48,6 @@ export default defineConfig(({ mode }) => {
                     results: resolve(__dirname, 'results.html'),
                     portfolio: resolve(__dirname, 'portfolio.html')
                 },
-                output: {
-                    // Keep the heavyweights in named shared chunks: three.js is
-                    // used by both pages, face-api only after camera opt-in.
-                    manualChunks: {
-                        three: ['three'],
-                        'face-api': ['face-api.js']
-                    }
-                }
             }
         },
         server: {

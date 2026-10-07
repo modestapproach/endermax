@@ -1,8 +1,18 @@
-import * as THREE from 'three';
-import { createEnvironment, createBlocks } from './scene.js';
-import { createPerson } from './person.js';
-import { setupControls, updateMovement, updateGaze, attachUIHandlers, updateObstruction, getIsDragging } from './interaction.js';
+import * as THREE from 'three/webgpu';
 import './ui.css';
+
+import { parseLayout } from './engine/layout.js';
+import { HeatField, createHeatNodes } from './engine/heat.js';
+import { buildWorld } from './engine/world.js';
+import { createRenderer, createLighting, createPipeline, backendName } from './engine/renderer.js';
+import { createCharacter } from './engine/character.js';
+import { drawPlanMap } from './engine/planMap.js';
+import { cutout } from './engine/materials.js';
+import { installDevtools, flags, CAMERA_PRESETS, createDemoHeat } from './engine/devtools.js';
+import {
+    setupControls, updateMovement, updateGaze, updateCutout, attachUIHandlers, getIsDragging,
+    onWindowResize, setPose, setFirstPerson, setPointer, getPose
+} from './interaction.js';
 
 import { Recorder } from './tracking/Recorder.js';
 import { EmotionState } from './tracking/EmotionState.js';
@@ -17,451 +27,264 @@ import GameLogic from './gameLogic.js';
 import { Inventory } from './inventory.js';
 import { db } from './db.js';
 
-let scene, camera, renderer, person, gazeRay;
-let birdsEyeCamera, birdsEyeRenderer; // Orthographic camera for top-down view
-let blocks = [];
-let heatmapData = new Map();
-let blockMap = new Map();
-let ground; // Ground plane for gaze detection
-let pathVisualizer;
-let promptManager;
-let gameLogic;
-let inventory;
-let startPosition;
-let objectiveStartTime;
+let scene, camera, renderer, post, character, world, layout, heat;
+let pathVisualizer, promptManager, gameLogic, inventory;
+let emotionState, recorder, faceDetector, voiceAgent;
 let isTestActive = false;
+let freeCamera = null;
+const clock = new THREE.Clock();
+const planCanvas = document.createElement('canvas');
 
-let emotionState;
-let recorder;
-let faceDetector;
-let voiceAgent;
-let clock;
+// FPS tracking for the dev HUD
+let frameCount = 0, fps = 0, fpsT = performance.now();
 
-// Initialize Recorder
-// export const recorder = new Recorder(); // Removed old export
-
-function init() {
-    // Scene setup
+async function init() {
     scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 120);
 
-    // ... (rest of scene setup) ...
+    try {
+        renderer = await createRenderer({ canvas: document.getElementById('canvas') });
+    } catch (err) {
+        console.error('Renderer failed to start', err);
+        document.body.insertAdjacentHTML('beforeend', '<div style="position:fixed;inset:0;display:grid;place-items:center;color:#fff;font:16px Inter,sans-serif;background:#0f0f1a;z-index:99999">This browser can\'t run the 3D view (WebGPU/WebGL2 unavailable).</div>');
+        return;
+    }
 
-    // Camera - positioned behind and slightly above the person's head with fish-eye effect
-    // Fog fully occludes everything past 70 units, so a 100-unit far plane
-    // culls the same view for less GPU work than the old 1000.
-    camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 0.1, 100);
-    camera.position.set(0, 4, 3.5);
-    camera.lookAt(0, 2.5, -5);
+    layout = parseLayout();
+    heat = new HeatField(layout);
+    const heatNodes = createHeatNodes(heat);
+    createLighting(scene, renderer);
+    world = buildWorld(layout, heatNodes);
+    scene.add(world.group);
 
-    // Renderer
-    renderer = new THREE.WebGLRenderer({
-        canvas: document.getElementById('canvas'),
-        antialias: true,
-        preserveDrawingBuffer: true // Required for screenshots
-    });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-    // Bird's Eye Orthographic Camera (top-down view, no perspective)
-    const frustumSize = 60; // Adjust to see the whole scene
-    birdsEyeCamera = new THREE.OrthographicCamera(
-        -frustumSize / 2, frustumSize / 2,
-        frustumSize / 2, -frustumSize / 2,
-        0.1, 1000
-    );
-    birdsEyeCamera.position.set(0, 50, 0); // High above the scene
-    birdsEyeCamera.lookAt(0, 0, 0); // Look straight down
-    birdsEyeCamera.up.set(0, 0, -1); // Set up vector to align with scene
-
-    // Bird's Eye Renderer (offscreen)
-    birdsEyeRenderer = new THREE.WebGLRenderer({
-        antialias: true,
-        preserveDrawingBuffer: true,
-        alpha: true
-    });
-    birdsEyeRenderer.setSize(512, 512); // Fixed size for bird's eye view
-    birdsEyeRenderer.shadowMap.enabled = true;
-    birdsEyeRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-    // Environment
-    const envObjects = createEnvironment(scene);
-    ground = envObjects.ground;
-    createBlocks(scene, blocks, heatmapData, blockMap);
-
-    // Path Visualizer
     pathVisualizer = new PathVisualizer(scene);
+    character = createCharacter(scene);
+    post = createPipeline(renderer, scene, camera);
 
-    // Person
-    const personData = createPerson(scene);
-    person = personData.person;
-    gazeRay = personData.gazeRay;
-
-    // Initialize Inventory
     inventory = new Inventory();
-
-    // Initialize Emotion State
-    emotionState = new EmotionState((emotion) => {
-        if (personData && personData.updateEmoji) {
-            personData.updateEmoji(emotion);
-        }
+    emotionState = new EmotionState((emotion) => character.updateEmoji(emotion));
+    faceDetector = new FaceEmotionDetector(document.getElementById('webcam-video'), (detected) => {
+        emotionState?.setDetectedEmotion(detected);
     });
+    recorder = new Recorder(character.person, emotionState, { frame: captureFrame, plan: () => capturePlan(512) });
 
-    // Initialize Face Emotion Detector
-    const webcamVideo = document.getElementById('webcam-video');
-    faceDetector = new FaceEmotionDetector(webcamVideo, (detectedEmotion) => {
-        if (emotionState) {
-            emotionState.setDetectedEmotion(detectedEmotion);
-        }
-    });
+    setupControls({ camera, character, world, heat, inventory });
+    attachUIHandlers(heat);
+    window.addEventListener('resize', () => onWindowResize(camera, renderer));
 
-    // Initialize Recorder
-    recorder = new Recorder(person, heatmapData, emotionState, renderer);
-
-    // Controls
-    setupControls(camera, person, renderer, inventory);
-    attachUIHandlers(blocks, heatmapData, recorder); // Pass recorder to UI handlers
-
-    // Initialize Prompt Manager
     promptManager = new PromptManager();
-
-    // Initialize Game Logic
-    // Initialize Game Logic
-    gameLogic = new GameLogic(promptManager, async () => {
-        await endTest();
-    });
+    gameLogic = new GameLogic(promptManager, async () => { await endTest(); });
     promptManager.setGameLogic(gameLogic);
-
-    // Initialize Voice Agent
     voiceAgent = new VoiceAgent();
-    clock = new THREE.Clock();
 
-    // Expose gameLogic globally for Recorder to access current task
     window.gameLogic = gameLogic;
     window.voiceAgent = voiceAgent;
     window.recorder = recorder;
 
-    // Store starting position
-    startPosition = { x: person.position.x, y: person.position.y, z: person.position.z };
-    objectiveStartTime = Date.now();
-
-    // Initialize Front Page -> Landing Page -> Intro Modal -> Tutorial
-    initFrontPage(() => {
-        initLandingPage(() => {
-            initIntroModal(() => {
-                // Start Tutorial after intro is dismissed
-                initTutorial();
-            });
-        });
+    installDevtools({
+        renderer, camera, layout, heat, captureFrame, capturePlan,
+        setPose, setFirstPerson, setPointer, getPose, setFreeCamera: (c) => { freeCamera = c; },
+        info: () => ({
+            backend: backendName(renderer), fps,
+            drawCalls: renderer.info.render.drawCalls, triangles: renderer.info.render.triangles
+        })
     });
 
-    animate();
+    if (flags.skip) {
+        for (const id of ['front-page', 'landing-page', 'intro-modal']) {
+            const el = document.getElementById(id);
+            if (el) { el.classList.add('hidden'); el.style.display = 'none'; }
+        }
+    } else {
+        initFrontPage(() => initLandingPage(() => initIntroModal(() => initTutorial())));
+    }
+    if (flags.heat === 'demo') createDemoHeat(layout, heat);
+    if (flags.cam) window.endermax.cam(flags.cam);
+    else setPose({ x: 0, z: 0, yaw: 0, pitch: 0 });
+
+    renderer.setAnimationLoop(animate);
 }
 
-// Export helper to start face detection
-export async function startFaceDetection() {
-    if (faceDetector) {
-        const started = await faceDetector.start();
-        if (started) {
-            // Show webcam video
-            const webcamVideo = document.getElementById('webcam-video');
-            if (webcamVideo) webcamVideo.classList.remove('hidden');
-            return true;
+function renderFrame() {
+    heat.flush();
+    post.pipeline.render();
+}
+
+// Captures render the full post stack into an offscreen 8-bit target and read
+// the pixels back. Reading the canvas instead returns whichever frame was last
+// *presented*, which lags (and never updates in a hidden tab).
+let captureRT = null;
+const captureCanvas = document.createElement('canvas');
+let capturing = false;
+async function captureFrame(type = 'image/jpeg', quality = 0.5, { width = 960, height = 600 } = {}) {
+    const w = Math.max(64, Math.round(width / 64) * 64); // WebGPU readback rows align to 256 bytes
+    const h = Math.round(height);
+    const prevSize = renderer.getSize(new THREE.Vector2());
+    const prevRatio = renderer.getPixelRatio();
+    capturing = true;
+    try {
+        renderer.setPixelRatio(1);
+        renderer.setSize(w, h, false);
+        camera.aspect = w / h; camera.updateProjectionMatrix();
+        if (!captureRT) captureRT = new THREE.RenderTarget(w, h, { type: THREE.UnsignedByteType, colorSpace: THREE.NoColorSpace });
+        captureRT.setSize(w, h);
+
+        tick(0);
+        heat.flush();
+        // Post passes re-render once per node frame, which normally only the
+        // animation loop advances; without this a capture shows the last frame.
+        renderer._nodes.nodeFrame.update();
+        renderer.setRenderTarget(captureRT);
+        post.pipeline.render();
+        renderer.setRenderTarget(null);
+        const px = await renderer.readRenderTargetPixelsAsync(captureRT, 0, 0, w, h);
+
+        captureCanvas.width = w; captureCanvas.height = h;
+        const g = captureCanvas.getContext('2d');
+        const img = g.createImageData(w, h);
+        const flip = !renderer.backend.isWebGPUBackend; // WebGL reads bottom-up
+        for (let y = 0; y < h; y++) {
+            const src = (flip ? h - 1 - y : y) * w * 4;
+            img.data.set(px.subarray(src, src + w * 4), y * w * 4);
         }
+        g.putImageData(img, 0, 0);
+        return captureCanvas.toDataURL(type, quality);
+    } finally {
+        renderer.setPixelRatio(prevRatio);
+        renderer.setSize(prevSize.x, prevSize.y, false);
+        camera.aspect = prevSize.x / prevSize.y; camera.updateProjectionMatrix();
+        capturing = false;
+    }
+}
+
+function capturePlan(size = 512) {
+    planCanvas.width = planCanvas.height = size;
+    drawPlanMap(planCanvas, { layout, heat, path: pathVisualizer, person: character.person, items: world.items });
+    return planCanvas.toDataURL('image/jpeg', 0.85);
+}
+
+export async function startFaceDetection() {
+    if (faceDetector && await faceDetector.start()) {
+        document.getElementById('webcam-video')?.classList.remove('hidden');
+        return true;
     }
     return false;
 }
 
-// Test Flow Control
 export async function startTest() {
-    console.log("🚀 startTest called");
-    // Clear the previous session only when a new test actually begins —
-    // clearing on page load meant a stray reload destroyed recorded data.
+    // Clear the previous session only when a new test actually begins.
     try {
         await Promise.all(db.tables.map(table => table.clear()));
     } catch (e) {
-        console.warn("Could not clear previous session data:", e);
+        console.warn('Could not clear previous session data:', e);
     }
-    // Start face detection (if not already started)
-    console.log("   Calling startFaceDetection...");
     await startFaceDetection();
-    console.log("   startFaceDetection returned");
 
     isTestActive = true;
-    if (inventory) inventory.clear();
+    inventory?.clear();
+    pathVisualizer?.reset();
+    heat.reset();
 
-    // Drop tutorial-phase wandering from the recorded path — the analysis
-    // should only see movement from the actual test.
-    if (pathVisualizer) pathVisualizer.reset();
-
-    // Reset Heatmap
-    heatmapData.clear();
-    blocks.forEach(block => {
-        if (block.material) {
-            block.userData._appliedHeat = 0; // keep updateGaze's dirty-tracking in sync
-            block.material.color.setHex(0xffffff);
-            block.material.emissive.setHex(0x000000);
-        }
-    });
-
-    // Start recording
-    console.log("   Starting recorder...");
-    if (recorder) await recorder.start(); // Added await just in case, though it's async
-    console.log("   Recorder started");
-
-    // Start Voice Agent listening
-    if (voiceAgent) voiceAgent.startListening();
-
-    // Show bottom controls
-    const bottomControls = document.getElementById('bottom-controls-container');
-    if (bottomControls) bottomControls.classList.remove('hidden');
-
-    // Hide Begin Test button
-    const beginTestBtn = document.getElementById('begin-test-btn');
-    if (beginTestBtn) beginTestBtn.classList.add('hidden');
-
-    // Start Prompt Manager
-    if (promptManager) {
-        promptManager.start();
-    }
-    console.log("✅ startTest complete");
+    if (recorder) await recorder.start();
+    voiceAgent?.startListening();
+    document.getElementById('bottom-controls-container')?.classList.remove('hidden');
+    document.getElementById('begin-test-btn')?.classList.add('hidden');
+    promptManager?.start();
 }
 
-// Appends to the persistent debug log, capped so it can never fill localStorage.
 function appendDebugLog(msg) {
     try {
         const current = localStorage.getItem('debugLog') || '';
         localStorage.setItem('debugLog', (current + '\n' + msg + ' at ' + new Date().toISOString()).slice(-50000));
-    } catch (e) { /* storage full/unavailable — never break the session over logging */ }
+    } catch (e) { /* never break the session over logging */ }
 }
 
 export async function endTest() {
-    console.log("🏁 End Test clicked - stopping recording...");
     appendDebugLog('[main] endTest called');
-
     isTestActive = false;
 
-    // Stop face detection
     if (faceDetector) {
         faceDetector.stop();
-        // Hide webcam video
-        const webcamVideo = document.getElementById('webcam-video');
-        if (webcamVideo) webcamVideo.classList.add('hidden');
+        document.getElementById('webcam-video')?.classList.add('hidden');
     }
+    voiceAgent?.stopListening();
 
-    // Stop Voice Agent listening
-    if (voiceAgent) voiceAgent.stopListening();
-
-    // Capture Session Data for 3D Snapshot
     try {
         if (recorder && recorder.sessionId) {
-            // 1. Heatmap Data (Keyed by Grid Coordinates for stability)
-            // We need to iterate blocks to get coordinates, as heatmapData only has UUIDs
-            // and UUIDs change on every reload.
-            const heatmapObj = {};
-            blocks.forEach(block => {
-                const heat = heatmapData.get(block.uuid);
-                if (heat > 0 && block.userData) {
-                    const key = `${block.userData.gridX},${block.userData.gridY},${block.userData.gridZ}`;
-                    heatmapObj[key] = heat;
-                }
-            });
-
-            // 2. Path Points
-            let pathPoints = [];
-            if (pathVisualizer && pathVisualizer.positions) {
-                // Extract valid points up to current count
-                for (let i = 0; i < pathVisualizer.count; i++) {
-                    pathPoints.push({
-                        x: pathVisualizer.positions[i * 3],
-                        y: pathVisualizer.positions[i * 3 + 1],
-                        z: pathVisualizer.positions[i * 3 + 2]
-                    });
-                }
+            const pathPoints = [];
+            for (let i = 0; i < pathVisualizer.count; i++) {
+                pathPoints.push({ x: pathVisualizer.positions[i * 3], y: pathVisualizer.positions[i * 3 + 1], z: pathVisualizer.positions[i * 3 + 2] });
             }
-
-            // 3. Collected Items (from Inventory)
-            const collectedItems = inventory ? inventory.items.map(item => item.id || item.label) : [];
-
-            // 4. Final Position
-            const finalPosition = {
-                x: person.position.x,
-                y: person.position.y,
-                z: person.position.z,
-                rotation: person.rotation.y
-            };
-
-            // Update Session in DB. Snapshots stay in their own table — the
-            // results page passes them to the viewer directly, and duplicating
-            // every screenshot into the session record doubled storage.
+            const p = character.person;
             await db.sessions.update(recorder.sessionId, {
-                heatmapData: heatmapObj,
-                pathPoints: pathPoints,
-                collectedItems: collectedItems,
-                finalPosition: finalPosition
+                heatmapData: heat.toObject(),   // v1-compatible "gx,gy,gz" keys
+                pathPoints,
+                collectedItems: inventory ? inventory.items.map(item => item.id || item.label) : [],
+                finalPosition: { x: p.position.x, y: p.position.y, z: p.position.z, rotation: p.rotation.y }
             });
-            console.log("💾 Session snapshot data saved to DB");
         }
     } catch (err) {
-        console.error("❌ Failed to save session snapshot data:", err);
+        console.error('Failed to save session snapshot data:', err);
     }
 
-    // Stop recording and wait for transcription to complete
-    // Stop recording and wait for transcription to complete
     if (recorder) {
-        console.log("⏳ Awaiting recorder.stop()...");
         appendDebugLog('[main] awaiting recorder.stop');
-
         await recorder.stop();
-
-        console.log("✅ Recorder fully stopped with transcription complete");
         appendDebugLog('[main] recorder.stop completed');
-    } else {
-        console.warn("⚠️ No recorder found!");
-        appendDebugLog('[main] NO RECORDER');
     }
 
-    // Hide bottom controls
-    const bottomControls = document.getElementById('bottom-controls-container');
-    if (bottomControls) bottomControls.classList.add('hidden');
-
-    // Show Mission Complete / Next Mission logic
-    showCompletionPopup();
-    console.log("✅ Completion popup shown");
-}
-
-function showCompletionPopup() {
+    document.getElementById('bottom-controls-container')?.classList.add('hidden');
     const popup = document.getElementById('completion-popup');
-    if (popup) {
-        popup.classList.remove('hidden');
-        popup.classList.add('visible');
-    }
+    if (popup) { popup.classList.remove('hidden'); popup.classList.add('visible'); }
 }
 
-// Wire up End Test button
-const endTestBtn = document.getElementById('endTestBtn');
-if (endTestBtn) {
-    endTestBtn.addEventListener('click', endTest);
-}
+document.getElementById('endTestBtn')?.addEventListener('click', endTest);
 
-// Wire up View Results button
 const viewResultsBtn = document.getElementById('viewResultsBtn');
-if (viewResultsBtn) {
-    viewResultsBtn.addEventListener('click', async () => {
-        console.log("🔍 View Results button clicked");
+viewResultsBtn?.addEventListener('click', async () => {
+    const hasChicken = inventory.items.some(item => item.label.toLowerCase().includes('chicken'));
+    if (!hasChicken && !confirm("You haven't collected the chicken yet. View results anyway?")) return;
+    viewResultsBtn.textContent = 'Processing transcription...';
+    viewResultsBtn.disabled = true;
+    await new Promise(resolve => setTimeout(resolve, 500));
+    window.location.href = '/results.html';
+});
 
-        // Nudge toward finishing the tasks, but never dead-end the researcher —
-        // the session data exists whether or not the chicken was collected.
-        const hasChicken = inventory.items.some(item => item.label.toLowerCase().includes('chicken'));
-        if (!hasChicken && !confirm("You haven't collected the chicken yet. View results anyway?")) {
-            return;
-        }
+function animate() {
+    if (capturing) return; // don't present a different frame mid-capture
+    const dt = Math.min(clock.getDelta(), 0.1);
+    tick(dt);
+    renderFrame();
 
-        // Show loading state
-        const originalText = viewResultsBtn.textContent;
-        viewResultsBtn.textContent = 'Processing transcription...';
-        viewResultsBtn.disabled = true;
-
-        // Wait a moment to ensure any pending transcription completes
-        // (In case user clicks before endTest completes)
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        console.log("🚀 Navigating to results page...");
-        window.location.href = '/results.html';
-    });
+    frameCount++;
+    const now = performance.now();
+    if (now - fpsT > 1000) { fps = Math.round(frameCount * 1000 / (now - fpsT)); frameCount = 0; fpsT = now; }
 }
 
-// Animation Loop
-let lastObjectiveIndex = -1;
-function animate() {
-    requestAnimationFrame(animate);
-    // One shared delta per frame, clamped so a backgrounded tab can't produce
-    // a giant catch-up step. All movement/heat rates are dt-scaled.
-    const dt = Math.min(clock.getDelta(), 0.1);
-    updateMovement(camera, person, dt);
-
-    // Update path trail
-    if (pathVisualizer) {
-        pathVisualizer.update(person.position);
+// One simulation step. Captures call tick(0) so a pose/camera change made
+// while the page isn't animating (hidden tab, automation) still shows up.
+function tick(dt) {
+    updateMovement(dt);
+    if (freeCamera) {
+        camera.position.set(...freeCamera.pos);
+        camera.lookAt(...freeCamera.target);
+        if (freeCamera.fov && camera.fov !== freeCamera.fov) { camera.fov = freeCamera.fov; camera.updateProjectionMatrix(); }
+    } else if (camera.fov !== 62) {
+        camera.fov = 62; camera.updateProjectionMatrix();
     }
+    camera.updateMatrixWorld();
+    pathVisualizer.update(character.person.position);
+    updateGaze(dt);
+    updateCutout();
+    if (freeCamera) cutout.enabled.value = 0;
+    updateTutorial(character.person, null, getIsDragging());
 
-    updateGaze(camera, person, blocks, heatmapData, gazeRay, ground, dt);
-    updateObstruction(camera, person, blocks, blockMap);
-
-    // Update tutorial
-    const isDragging = getIsDragging();
-    updateTutorial(person, heatmapData, isDragging);
-
-    // Update game logic and check objectives
     if (gameLogic && isTestActive) {
         gameLogic.update({ inventory });
-
-        // Reset the objective timer once when the active objective changes
-        if (gameLogic.currentObjectiveIndex !== lastObjectiveIndex) {
-            lastObjectiveIndex = gameLogic.currentObjectiveIndex;
-            objectiveStartTime = Date.now();
-        }
-
-        // Update Voice Agent
-        if (voiceAgent && recorder && recorder.audioRecorder && emotionState) {
-            const currentEmotion = emotionState.currentEmotion || emotionState.detectedEmotion || 'neutral';
-            voiceAgent.update(dt, currentEmotion);
+        if (voiceAgent && recorder?.audioRecorder && emotionState) {
+            voiceAgent.update(dt, emotionState.currentEmotion || emotionState.detectedEmotion || 'neutral');
         }
     }
-
-    renderer.render(scene, camera);
 }
-
-// Tutorial Event Listeners
-window.addEventListener('tutorialSpawnObject', (e) => {
-    const object = e.detail.object;
-    if (object) {
-        // Add to scene
-        // We need to ensure it's added to the scene, but tutorial.js might have tried to add it to person.parent
-        // Let's just ensure it's in the blocks array for raycasting
-        if (!blocks.includes(object)) {
-            blocks.push(object);
-        }
-        // Ensure it's in the scene if not already
-        if (!object.parent) {
-            scene.add(object);
-        }
-    }
-});
-
-window.addEventListener('tutorialRemoveObject', (e) => {
-    const object = e.detail.object;
-    if (object) {
-        // Remove from scene
-        if (object.parent) {
-            object.parent.remove(object);
-        }
-        // Remove from blocks array
-        const index = blocks.indexOf(object);
-        if (index > -1) {
-            blocks.splice(index, 1);
-        }
-        // Clean up heatmap data
-        heatmapData.delete(object.uuid);
-        // Free GPU resources — removed meshes never come back
-        if (object.geometry) object.geometry.dispose();
-        if (object.material) {
-            (Array.isArray(object.material) ? object.material : [object.material]).forEach(m => m.dispose());
-        }
-    }
-});
-
-// Export function to get bird's eye renderer and camera
-export function getBirdsEyeView() {
-    return {
-        renderer: birdsEyeRenderer,
-        camera: birdsEyeCamera,
-        scene: scene,
-        pathVisualizer: pathVisualizer
-    };
-}
-
-
 
 init();

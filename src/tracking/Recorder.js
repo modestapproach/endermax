@@ -3,11 +3,10 @@ import { getCurrentGaze } from '../interaction.js';
 import { AudioRecorder } from './AudioRecorder.js';
 
 export class Recorder {
-    constructor(person, heatmapData, emotionState, renderer) {
+    constructor(person, emotionState, capture) {
         this.person = person;
-        this.heatmapData = heatmapData;
         this.emotionState = emotionState;
-        this.renderer = renderer;
+        this.capture = capture;
 
         this.isRecording = false;
         this.sessionId = null;
@@ -161,46 +160,16 @@ export class Recorder {
                 window.gameLogic.getCurrentObjective()?.description :
                 'No task';
 
-            // Capture screenshot (first person view)
-            // Note: toDataURL is synchronous and can be slow.
-            // For production, we might want to use toBlob or offscreen canvas.
-            // But for this prototype, it's fine.
-            const screenshot = this.renderer.domElement.toDataURL('image/jpeg', 0.5); // Low quality for speed
-
-            // Capture bird's eye view screenshot
+            // Frame + plan-map captures come from the engine (`capture` is
+            // { frame(), plan() }); WebGPU canvases must be read in the same
+            // task they're rendered, so the engine renders on demand.
+            let screenshot = null;
             let birdsEyeScreenshot = null;
             try {
-                const { getBirdsEyeView } = await import('../main.js');
-                const birdsEyeView = getBirdsEyeView();
-                if (birdsEyeView && birdsEyeView.renderer && birdsEyeView.camera && birdsEyeView.scene) {
-                    // Temporarily style path dots for bird's eye view
-                    let originalColor, originalSize;
-                    const pathVis = birdsEyeView.pathVisualizer;
-
-                    if (pathVis && pathVis.material) {
-                        originalColor = pathVis.material.color.getHex();
-                        originalSize = pathVis.material.size;
-
-                        pathVis.material.color.setHex(0x00ff00); // Bright Green
-                        pathVis.material.size = 7; // Comically large
-                        pathVis.material.needsUpdate = true;
-                    }
-
-                    // Render the bird's eye view
-                    birdsEyeView.renderer.render(birdsEyeView.scene, birdsEyeView.camera);
-
-                    // Restore path dots style
-                    if (pathVis && pathVis.material) {
-                        pathVis.material.color.setHex(originalColor);
-                        pathVis.material.size = originalSize;
-                        pathVis.material.needsUpdate = true;
-                    }
-
-                    // Capture as screenshot
-                    birdsEyeScreenshot = birdsEyeView.renderer.domElement.toDataURL('image/jpeg', 0.6);
-                }
+                screenshot = await this.capture.frame('image/jpeg', 0.5);
+                birdsEyeScreenshot = this.capture.plan();
             } catch (error) {
-                console.error('Error capturing bird\'s eye screenshot:', error);
+                console.error('Error capturing snapshot images:', error);
             }
 
             // Get position
